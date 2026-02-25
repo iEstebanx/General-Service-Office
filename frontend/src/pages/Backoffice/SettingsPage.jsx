@@ -1,4 +1,4 @@
-// frontend/src/contents/pages/SettingsPage.jsx
+// frontend/src/pages/Backoffice/SettingsPage.jsx
 import React from "react";
 import axios from "axios";
 import { Card, CardContent, Typography, Button, Divider, TextField } from "@mui/material";

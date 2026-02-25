@@ -11,28 +11,29 @@ export const buildTheme = (mode) => {
       primary: {
         main: t.primary,
         light: t.primaryLight,
-        dark: t.primaryDark
+        dark: t.primaryDark,
+        contrastText: "#ffffff", // ✅ FIX: ensures white text/icons on green AppBar
       },
       background: {
         default: t.bg,
-        paper: t.card
+        paper: t.card,
       },
       text: {
-        primary: t.text
-      }
+        primary: t.text,
+      },
     },
     shape: {
-      borderRadius: 14
+      borderRadius: 14,
     },
     components: {
       MuiButton: {
         styleOverrides: {
           contained: {
             fontWeight: 800,
-            textTransform: "none"
-          }
-        }
-      }
-    }
+            textTransform: "none",
+          },
+        },
+      },
+    },
   });
 };

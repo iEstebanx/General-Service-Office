@@ -1,14 +1,17 @@
 // frontend/src/App.jsx
-import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { CssBaseline } from "@mui/material";
 
-import SchedulePage from "./contents/pages/SchedulePage.jsx";
-import BackofficeLogin from "./contents/pages/BackofficeLogin.jsx";
-import BackofficeLayout from "./contents/pages/BackofficeLayout.jsx";
-import AdminDashboard from "./contents/pages/AdminDashboard.jsx";
-import EventTypesPage from "./contents/pages/EventTypesPage.jsx";
-import SettingsPage from "./contents/pages/SettingsPage.jsx";
+import SchedulePage from "./pages/SchedulePage.jsx";
+import BackofficeLogin from "./pages/Backoffice/BackofficeLogin.jsx";
+import BackofficeLayout from "./layouts/BackofficeLayout.jsx";
+import AdminDashboard from "./pages/Backoffice/AdminDashboard.jsx";
+import EventTypesPage from "./pages/Backoffice/EventTypesPage.jsx";
+
+import AuditTrail from "./pages/Backoffice/AuditTrail.jsx";
+import UserManagement from "./pages/Backoffice/UserManagement.jsx";
+import BackupAndRestore from "./pages/Backoffice/BackupAndRestore.jsx";
+
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
 export default function App() {
@@ -30,7 +33,11 @@ export default function App() {
         >
           <Route index element={<AdminDashboard />} />
           <Route path="event-types" element={<EventTypesPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+
+          {/* Settings dropdown destinations (no SettingsPage anymore) */}
+          <Route path="audit-trail" element={<AuditTrail />} />
+          <Route path="user-management" element={<UserManagement />} />
+          <Route path="backup-restore" element={<BackupAndRestore />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

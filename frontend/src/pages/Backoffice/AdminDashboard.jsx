@@ -1,4 +1,4 @@
-// frontend/src/contents/pages/AdminDashboard.jsx
+// frontend/src/pages/Backoffice/AdminDashboard.jsx
 import React from "react";
 import axios from "axios";
 import { Card, CardContent, Typography, List, ListItem, ListItemText } from "@mui/material";

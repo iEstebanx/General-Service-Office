@@ -320,4 +320,23 @@ router.delete("/:id", (req, res) => {
   return res.json({ ok: true });
 });
 
+// ARCHIVE booking
+router.patch("/:id/archive", (req, res) => {
+  const idx = bookings.findIndex((b) => b.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ message: "Booking not found" });
+
+  // Toggle archive status
+  bookings[idx].archived = !bookings[idx].archived;
+  bookings[idx].updatedAt = new Date().toISOString();
+
+  addAudit("BOOKING_ARCHIVED", { 
+    id: bookings[idx].id, 
+    date: bookings[idx].date, 
+    eventName: bookings[idx].eventName,
+    archived: bookings[idx].archived 
+  });
+  
+  return res.json(bookings[idx]);
+});
+
 module.exports = router;

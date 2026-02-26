@@ -88,6 +88,64 @@ const LIMITS = {
   donationDigits: 7,
 };
 
+// Helper function to format dates nicely without repeating month/year
+function formatDateRange(booking) {
+  console.log('Booking data:', { id: booking.id, date: booking.date, dates: booking.dates });
+
+  const dates = Array.isArray(booking.dates) && booking.dates.length 
+    ? booking.dates 
+    : (booking.date ? [booking.date] : []);
+  
+  if (dates.length === 0) return '—';
+  if (dates.length === 1) return dates[0];
+  
+  // Parse all dates
+  const parsedDates = dates.map(d => dayjs(d));
+  
+  // Group by month-year
+  const grouped = {};
+  parsedDates.forEach(date => {
+    const key = date.format('MMMM YYYY');
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(date);
+  });
+  
+  // Format each group
+  const formattedGroups = Object.entries(grouped).map(([monthYear, datesInGroup]) => {
+    if (datesInGroup.length === 1) {
+      return datesInGroup[0].format('MMMM D, YYYY');
+    }
+    
+    // Sort dates within group
+    datesInGroup.sort((a, b) => a.date() - b.date());
+    
+    const firstDay = datesInGroup[0].date();
+    const lastDay = datesInGroup[datesInGroup.length - 1].date();
+    
+    // Check if dates are consecutive
+    let isConsecutive = true;
+    for (let i = 1; i < datesInGroup.length; i++) {
+      if (datesInGroup[i].date() !== datesInGroup[i-1].date() + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+    
+    if (isConsecutive) {
+      // Consecutive dates: "Month Day-Day, Year"
+      return `${datesInGroup[0].format('MMMM')} ${firstDay}-${lastDay}, ${datesInGroup[0].format('YYYY')}`;
+    } else {
+      // Non-consecutive: list all dates with month only on first
+      return datesInGroup.map((d, idx) => {
+        if (idx === 0) return d.format('MMMM D');
+        return d.format('D');
+      }).join(', ') + `, ${datesInGroup[0].format('YYYY')}`;
+    }
+  });
+  
+  return formattedGroups.join(' and ');
+}
+
 function ResourceInputs({ resources, setResources }) {
   const setQty = (key, maxDigits) => (e) => {
     const raw = e.target.value;
@@ -186,7 +244,14 @@ function HowItWorks() {
 }
 
 /** --------- Inline CalendarSection (FIXED OVERFLOW & CENTERED YEAR) --------- */
-function CalendarSection({ selectedDates, onToggleDate, onViewChange, headerActions }) {
+function CalendarSection({ 
+  selectedDates, 
+  onToggleDate, 
+  onViewChange, 
+  headerActions,
+  calendarMonth,
+  onMonthChange
+}) {
   const contentRef = React.useRef(null);
   const [cardHeight, setCardHeight] = React.useState(null);
   const EXTRA_HEIGHT = 16;
@@ -294,16 +359,12 @@ function CalendarSection({ selectedDates, onToggleDate, onViewChange, headerActi
         <LocalizationProvider dateAdapter={AdapterDayjs}>
           <DateCalendar
             // keep a "reference" date so calendar still knows where to display
-            value={selectedDates?.[0] ?? dayjs()}
+            value={calendarMonth}
             onViewChange={onViewChange}
+            // Add this line 👇 to handle month changes
+            onMonthChange={(newMonth) => onMonthChange?.(newMonth)}
             showDaysOutsideCurrentMonth={false}
             minDate={dayjs()}
-            onMonthChange={() => {
-              measure();
-              setTimeout(measure, 0);
-              setTimeout(measure, 180);
-              setTimeout(measure, 360);
-            }}
             slots={{ day: MultiPickDay }}
             sx={{
               width: "100%",
@@ -425,6 +486,8 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
   const [discountPct, setDiscountPct] = React.useState("");
 
   const [donation, setDonation] = React.useState("");
+
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = React.useState(false);
 
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
@@ -810,6 +873,39 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     }
   }
 
+  const handleConfirmSubmit = async () => {
+    setConfirmSubmitOpen(false);
+    await submit(); // Call the existing submit function
+  };
+
+  const handleCancelSubmit = () => {
+    setConfirmSubmitOpen(false);
+  };
+
+  const handleSubmitClick = () => {
+    // First validate all fields
+    if (!requestedBy.trim()) return notify("Please enter Requested by (Name).", "warning");
+    if (!eventTypeId) return notify("Please select an Event.", "warning");
+    if (isOther && !otherEventName.trim()) return notify("Please enter the Event (Other).", "warning");
+    if (!isOther && !selectedEvent) return notify("Please select a valid Event Name.", "warning");
+    if (!venue) return notify("Please select a Venue.", "warning");
+    if (safeAmount <= 0) return notify("Please enter a valid Amount.", "warning");
+
+    const isEdit = !!initialBooking?.id;
+    const dateList = (isEdit ? [dates?.[0]] : (dates || [])).filter(Boolean);
+    if (!dateList.length) return notify("Please select at least one date.", "warning");
+
+    // Time validation
+    const s = toMinutes(startTime.format("HH:mm"));
+    const e = toMinutes(endTime.format("HH:mm"));
+    if (!Number.isFinite(s) || !Number.isFinite(e) || s >= e) {
+      return notify("Invalid time range. End time must be after start time.", "warning");
+    }
+
+    // If all validations pass, show confirmation dialog
+    setConfirmSubmitOpen(true);
+  };
+
   return (
     <>
       <Dialog
@@ -1095,7 +1191,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
 
           <Button
             variant="contained"
-            onClick={submit}
+            onClick={handleSubmitClick}  // Changed from submit to handleSubmitClick
             sx={{ fontWeight: 900, px: 2.5 }}
           >
             {initialBooking?.id ? "Update Booking" : "Submit Booking"}
@@ -1142,6 +1238,47 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
           {snack.message}
         </Alert>
       </Snackbar>
+
+      {/* Submit Confirmation Dialog */}
+      <Dialog
+        open={confirmSubmitOpen}
+        onClose={handleCancelSubmit}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900 }}>
+          Confirm {initialBooking?.id ? "Update" : "Submission"}
+        </DialogTitle>
+        <DialogContent>
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Are you sure you want to {initialBooking?.id ? "update" : "submit"} this booking?
+            </Typography>
+            
+            <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+              <Typography variant="body2" component="div">
+                <strong>Event:</strong> {finalEventName}<br />
+                <strong>Requested by:</strong> {requestedBy}<br />
+                <strong>Venue:</strong> {venue}<br />
+                <strong>Date(s):</strong> {dates.map(d => d.format('MMM D, YYYY')).join(', ')}<br />
+                <strong>Time:</strong> {startTime.format('HH:mm')} - {endTime.format('HH:mm')}<br />
+                <strong>Final Amount:</strong> ₱{finalAmount.toLocaleString()}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelSubmit}>Cancel</Button>
+          <Button
+            onClick={handleConfirmSubmit}
+            color="primary"
+            variant="contained"
+            sx={{ fontWeight: 800 }}
+          >
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
@@ -1178,7 +1315,9 @@ function BookingDetailsDialog({ open, booking, onClose }) {
             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
               <Box>
                 <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Date</Typography>
-                <Typography sx={{ fontWeight: 800 }}>{booking.date ?? "—"}</Typography>
+                <Typography sx={{ fontWeight: 800 }}>
+                  {formatDateRange(booking)}
+                </Typography>
               </Box>
               <Box>
                 <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Time</Typography>
@@ -1437,9 +1576,7 @@ function BookingHistory({
                   onClick={() => onRowClick?.(b)}
                 >
                   <TableCell>
-                    {Array.isArray(b.dates) && b.dates.length
-                      ? (b.dates.length === 1 ? b.dates[0] : `${b.dates[0]} … ${b.dates[b.dates.length - 1]} (${b.dates.length} days)`)
-                      : b.date}
+                    {formatDateRange(b)}
                   </TableCell>
                   <TableCell>
                     <Chip
@@ -1493,7 +1630,7 @@ function BookingHistory({
                       </IconButton>
                     </Tooltip>
 
-                    <Tooltip title="Archive">
+                    <Tooltip title={b.archived ? "Unarchive" : "Archive"}>
                       <span>
                         <IconButton
                           size="small"
@@ -1501,7 +1638,7 @@ function BookingHistory({
                             e.stopPropagation();
                             onArchive?.(b);
                           }}
-                          disabled={!!b.archived}
+                          color={b.archived ? "success" : "default"}
                         >
                           <ArchiveIcon fontSize="small" />
                         </IconButton>
@@ -1536,6 +1673,8 @@ export default function SchedulePage() {
   const [open, setOpen] = React.useState(false);
   const [calendarView, setCalendarView] = React.useState("day");
 
+  const [calendarMonth, setCalendarMonth] = React.useState(dayjs());
+
   // ✅ history state
   const [historyLoading, setHistoryLoading] = React.useState(false);
   const [bookings, setBookings] = React.useState([]);
@@ -1551,6 +1690,14 @@ export default function SchedulePage() {
 
   const [printMode, setPrintMode] = React.useState("print"); // "print" | "download"
   const [printDocType, setPrintDocType] = React.useState("permit");
+
+  // Delete confirmation dialog states
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [deleteDialogBooking, setDeleteDialogBooking] = React.useState(null);
+
+  // Archive confirmation dialog states
+  const [archiveDialogOpen, setArchiveDialogOpen] = React.useState(false);
+  const [archiveDialogBooking, setArchiveDialogBooking] = React.useState(null);
 
   const filteredBookings = React.useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1653,15 +1800,10 @@ export default function SchedulePage() {
 
   const handleDeleteBooking = async (b) => {
     if (!b?.id) return;
-    if (!window.confirm("Delete this booking?")) return;
-
-    try {
-      await axios.delete(`${API}/bookings/${b.id}`);
-      setBookings((prev) => prev.filter((x) => x.id !== b.id));
-    } catch (err) {
-      console.error(err);
-      alert("Failed to delete booking.");
-    }
+    
+    // Replace window.confirm with dialog state
+    setDeleteDialogBooking(b);
+    setDeleteDialogOpen(true);
   };
 
   const openPrint = (b) => {
@@ -1680,16 +1822,51 @@ export default function SchedulePage() {
 
   const handleArchiveBooking = async (b) => {
     if (!b?.id) return;
+    
+    // Replace window.confirm with dialog state
+    setArchiveDialogBooking(b);
+    setArchiveDialogOpen(true);
+  };
 
+  // Delete confirmation handlers
+  const handleConfirmDelete = async () => {
+    if (!deleteDialogBooking?.id) return;
+    
     try {
-      const res = await axios.patch(`${API}/bookings/${b.id}/archive`);
-      const updated = res.data;
+      await axios.delete(`${API}/bookings/${deleteDialogBooking.id}`);
+      setBookings((prev) => prev.filter((x) => x.id !== deleteDialogBooking.id));
+      setDeleteDialogOpen(false);
+      setDeleteDialogBooking(null);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete booking.");
+    }
+  };
 
+  const handleCancelDelete = () => {
+    setDeleteDialogOpen(false);
+    setDeleteDialogBooking(null);
+  };
+
+  // Archive confirmation handlers
+  const handleConfirmArchive = async () => {
+    if (!archiveDialogBooking?.id) return;
+    
+    try {
+      const res = await axios.patch(`${API}/bookings/${archiveDialogBooking.id}/archive`);
+      const updated = res.data;
       setBookings((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      setArchiveDialogOpen(false);
+      setArchiveDialogBooking(null);
     } catch (err) {
       console.error(err);
       alert("Failed to archive booking.");
     }
+  };
+
+  const handleCancelArchive = () => {
+    setArchiveDialogOpen(false);
+    setArchiveDialogBooking(null);
   };
 
   return (
@@ -1719,6 +1896,8 @@ export default function SchedulePage() {
               });
             }}
             onViewChange={(v) => setCalendarView(v)}
+            calendarMonth={calendarMonth}
+            onMonthChange={(newMonth) => setCalendarMonth(newMonth)}
             headerActions={
               <>
                 <Button
@@ -1813,7 +1992,7 @@ export default function SchedulePage() {
         }}
       />
 
-      {/* ✅ Print Dialog (ADD THIS HERE) */}
+      {/* ✅ Print Dialog */}
       <PrintDialog
         open={printOpen}
         booking={printBooking}
@@ -1826,6 +2005,98 @@ export default function SchedulePage() {
           setPrintBooking(null);
         }}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={handleCancelDelete}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900 }}>
+          Delete Booking
+        </DialogTitle>
+        <DialogContent>
+          {/* Change DialogContentText to just a Box with Typography components */}
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Are you sure you want to delete this booking?
+            </Typography>
+            
+            {deleteDialogBooking && (
+              <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
+                <Typography variant="body2" component="div">
+                  <strong>Event:</strong> {deleteDialogBooking.eventName}<br />
+                  <strong>Requested by:</strong> {deleteDialogBooking.requestedBy}<br />
+                  <strong>Date:</strong> {formatDateRange(deleteDialogBooking)}
+                </Typography>
+              </Box>
+            )}
+            
+            <Typography sx={{ color: 'error.main', fontWeight: 700 }}>
+              This action cannot be undone.
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelDelete}>Cancel</Button>
+          <Button
+            onClick={handleConfirmDelete}
+            color="error"
+            variant="contained"
+            sx={{ fontWeight: 800 }}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Archive Confirmation Dialog */}
+      <Dialog
+        open={archiveDialogOpen}
+        onClose={handleCancelArchive}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900 }}>
+          {archiveDialogBooking?.archived ? "Unarchive Booking" : "Archive Booking"}
+        </DialogTitle>
+        <DialogContent>
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Are you sure you want to {archiveDialogBooking?.archived ? "unarchive" : "archive"} this booking?
+            </Typography>
+            
+            {archiveDialogBooking && (
+              <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
+                <Typography variant="body2" component="div">
+                  <strong>Event:</strong> {archiveDialogBooking.eventName}<br />
+                  <strong>Requested by:</strong> {archiveDialogBooking.requestedBy}<br />
+                  <strong>Date:</strong> {formatDateRange(archiveDialogBooking)}
+                </Typography>
+              </Box>
+            )}
+            
+            <Typography sx={{ color: 'warning.main', fontWeight: 700 }}>
+              {archiveDialogBooking?.archived 
+                ? "Unarchived bookings will appear in the active list again."
+                : "Archived bookings will be hidden from the active list but can be viewed by selecting 'Archived' in the status filter."}
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelArchive}>Cancel</Button>
+          <Button
+            onClick={handleConfirmArchive}
+            color="warning"
+            variant="contained"
+            sx={{ fontWeight: 800 }}
+          >
+            {archiveDialogBooking?.archived ? "Unarchive" : "Archive"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
     </>
   );
 }

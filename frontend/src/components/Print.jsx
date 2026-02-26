@@ -23,22 +23,60 @@ function yesNo(v) {
 }
 
 function formatDateDisplay(booking) {
-  const dates =
-    Array.isArray(booking?.dates) && booking.dates.length
-      ? booking.dates
-      : booking?.date
-      ? [booking.date]
-      : [];
-
+  const dates = Array.isArray(booking?.dates) && booking.dates.length 
+    ? booking.dates 
+    : (booking?.date ? [booking.date] : []);
+  
   if (!dates.length) return "—";
-
-  const formatted = dates
-    .filter(Boolean)
-    .map((d) => dayjs(d).format("MMMM D, YYYY").toUpperCase());
-
-  if (formatted.length === 1) return formatted[0];
-  if (formatted.length === 2) return `${formatted[0]} & ${formatted[1]}`;
-  return formatted.join(", ");
+  if (dates.length === 1) {
+    return dayjs(dates[0]).format("MMMM D, YYYY").toUpperCase();
+  }
+  
+  // Parse all dates
+  const parsedDates = dates.map(d => dayjs(d));
+  
+  // Group by month-year
+  const grouped = {};
+  parsedDates.forEach(date => {
+    const key = date.format('MMMM YYYY');
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(date);
+  });
+  
+  // Format each group
+  const formattedGroups = Object.entries(grouped).map(([monthYear, datesInGroup]) => {
+    if (datesInGroup.length === 1) {
+      return datesInGroup[0].format('MMMM D, YYYY').toUpperCase();
+    }
+    
+    // Sort dates within group
+    datesInGroup.sort((a, b) => a.date() - b.date());
+    
+    const firstDay = datesInGroup[0].date();
+    const lastDay = datesInGroup[datesInGroup.length - 1].date();
+    
+    // Check if dates are consecutive
+    let isConsecutive = true;
+    for (let i = 1; i < datesInGroup.length; i++) {
+      if (datesInGroup[i].date() !== datesInGroup[i-1].date() + 1) {
+        isConsecutive = false;
+        break;
+      }
+    }
+    
+    if (isConsecutive) {
+      // Consecutive dates: "Month Day-Day, Year"
+      return `${datesInGroup[0].format('MMMM')} ${firstDay}-${lastDay}, ${datesInGroup[0].format('YYYY')}`.toUpperCase();
+    } else {
+      // Non-consecutive: list all dates with month only on first
+      return datesInGroup.map((d, idx) => {
+        if (idx === 0) return d.format('MMMM D');
+        return d.format('D');
+      }).join(', ') + `, ${datesInGroup[0].format('YYYY')}`.toUpperCase();
+    }
+  });
+  
+  return formattedGroups.join(' and ');
 }
 
 function formatTimeDisplay(booking) {
@@ -106,10 +144,16 @@ function GovHeader() {
 
 function ApprovalBlock() {
   return (
-    <Box sx={{ mt: 4, textAlign: "center" }}>
-      <Typography sx={{ fontWeight: 800, mb: 2 }}>Approved by:</Typography>
-      <Typography sx={{ fontWeight: 900, mt: 2 }}>Engr. Maria Santos</Typography>
-      <Typography sx={{ fontWeight: 700 }}>GSO Head</Typography>
+    <Box sx={{ mt: 4, display: "flex", justifyContent: "flex-end" }}>
+      <Box sx={{ display: "flex", gap: 2 }}>
+        <Box>
+          <Typography sx={{ fontWeight: 800 }}>Approved by:</Typography>
+        </Box>
+        <Box>
+          <Typography sx={{ fontWeight: 900, display: "block" }}>Engr. Maria Santos</Typography>
+          <Typography sx={{ fontWeight: 700, textAlign: "center" }}>GSO Head</Typography>
+        </Box>
+      </Box>
     </Box>
   );
 }
@@ -137,7 +181,7 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA(
     <Box ref={ref} sx={{ p: 3, fontFamily: "Arial, sans-serif", color: "#111" }}>
       <style>
         {`
-          @page { size: A4 landscape; margin: 14mm; }
+          @page { size: A4 portrait; margin: 14mm; }
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         `}
       </style>
@@ -333,7 +377,7 @@ export default function PrintDialog({
 
     const imgData = canvas.toDataURL("image/png");
 
-    const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
 

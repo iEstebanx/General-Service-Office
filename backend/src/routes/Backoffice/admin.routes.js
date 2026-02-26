@@ -1,7 +1,8 @@
+// backend/src/routes/admin.routes.js
 const router = require("express").Router();
-const { requireAdmin } = require("../auth");
-const { auditTrail } = require("../utils/audit");
-const { eventTypes, bookings } = require("../store");
+const { requireAdmin } = require("../../auth");
+const { auditTrail } = require("../../utils/audit");
+const { eventTypes, bookings } = require("../../store");
 
 router.get("/audit", requireAdmin, (req, res) => res.json(auditTrail));
 

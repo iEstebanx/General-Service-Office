@@ -1,6 +1,7 @@
+// backend/src/routes/auth.routes.js
 const router = require("express").Router();
-const { ADMIN_USER, ADMIN_PASS, ADMIN_TOKEN } = require("../config");
-const { addAudit } = require("../utils/audit");
+const { ADMIN_USER, ADMIN_PASS, ADMIN_TOKEN } = require("../../config");
+const { addAudit } = require("../../utils/audit");
 
 router.post("/login", (req, res) => {
   const { username, password } = req.body || {};

@@ -2,15 +2,16 @@
 import React from "react";
 import { ThemeProvider } from "@mui/material/styles";
 import { buildTheme } from "./index";
+import CssBaseline from "@mui/material/CssBaseline";
 
 export default function ThemeModeProvider({ children }) {
-  const [mode, setMode] = React.useState("light");
+  const [mode] = React.useState("light");
   const theme = React.useMemo(() => buildTheme(mode), [mode]);
 
   return (
     <ThemeProvider theme={theme}>
+      <CssBaseline />
       {children}
-      {/* If you want a toggle later, expose setMode via context */}
     </ThemeProvider>
   );
 }

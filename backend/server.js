@@ -3,10 +3,10 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
-const authRoutes = require("./src/routes/auth.routes");
+const authRoutes = require("./src/routes/Backoffice/auth.routes");
 const eventTypesRoutes = require("./src/routes/eventTypes.routes");
 const bookingsRoutes = require("./src/routes/bookings.routes");
-const adminRoutes = require("./src/routes/admin.routes");
+const adminRoutes = require("./src/routes/Backoffice/admin.routes");
 
 const app = express();
 

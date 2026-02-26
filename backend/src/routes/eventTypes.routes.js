@@ -1,3 +1,4 @@
+// backend/src/routes/eventTypes.routes.js
 const router = require("express").Router();
 const { requireAdmin } = require("../auth");
 const { eventTypes, genId } = require("../store");

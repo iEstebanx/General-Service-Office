@@ -168,12 +168,6 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA(
   const r = booking.resources || {};
   const venueTitle = booking?.venue ? `${booking.venue} Permit` : "Permit";
 
-  const donationAmount = Number(booking?.donation || 0);
-  const donated =
-    donationAmount > 0
-      ? `Yes (₱${donationAmount.toLocaleString()})`
-      : "No";
-
   const amountNum = Number(booking?.finalAmount ?? booking?.amount ?? 0);
   const amountText = amountNum > 0 ? `₱${amountNum.toLocaleString()}` : "—";
 
@@ -206,7 +200,6 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA(
         <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
         <InfoRow label="Date" value={formatDateDisplay(booking)} />
         <InfoRow label="Time" value={formatTimeDisplay(booking)} />
-        <InfoRow label="Donated" value={donated} />
 
         <Box sx={{ height: 14 }} />
 
@@ -264,7 +257,15 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA(
       </Box>
 
       {/* separator space */}
-      <Box sx={{ height: 28 }} />
+      <Box sx={{ my: 6 }}>
+        <Box
+          sx={{
+            borderTop: "2px dashed #999",
+            width: "100%",
+            mb: 4,
+          }}
+        />
+      </Box>
 
       {/* ===================== SOA SECTION (BOTTOM OF SAME PAPER) ===================== */}
       <GovHeader />
@@ -391,7 +392,7 @@ export default function PrintDialog({
     const h = imgH * scale;
 
     const x = (pageW - w) / 2;
-    const y = (pageH - h) / 2;
+    const y = 0;
 
     pdf.addImage(imgData, "PNG", x, y, w, h, undefined, "FAST");
 

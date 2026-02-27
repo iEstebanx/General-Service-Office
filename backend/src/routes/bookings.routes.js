@@ -1,27 +1,33 @@
 // backend/src/routes/bookings.routes.js
 const router = require("express").Router();
-const { bookings, eventTypes, genId, calcAmount } = require("../store");
-const { addAudit } = require("../utils/audit");
-const { requireAdmin } = require("../auth");
+const pool = require("../db");
 
-// ✅ helpers: time overlap check
+// ---------- helpers ----------
 function toMinutes(hhmm = "") {
   const [h, m] = String(hhmm).split(":").map(Number);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
   return h * 60 + m;
 }
-
-function rangesOverlap(startA, endA, startB, endB) {
-  // overlap if A starts before B ends AND A ends after B starts
-  return startA < endB && endA > startB;
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && aEnd > bStart;
+}
+function genId(prefix = "bk") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 9)}`;
 }
 
-function bookingHasDate(b, dateStr) {
-  const ds = Array.isArray(b.dates) && b.dates.length ? b.dates : (b.date ? [b.date] : []);
-  return ds.includes(dateStr);
+// Reads all dates for a booking
+async function getBookingDates(bookingId) {
+  const [rows] = await pool.query(
+    `SELECT booking_date FROM booking_dates WHERE booking_id = ? ORDER BY booking_date ASC`,
+    [bookingId]
+  );
+  return rows.map((r) => r.booking_date);
 }
 
-function findConflict({ venue, dateList, startTime, endTime, ignoreId = null }) {
+// Conflict checker: same venue + same date + overlapping time, ignore archived, optionally ignore booking id
+async function findConflict({ venue, dateList, startTime, endTime, ignoreId = null }) {
   const s = toMinutes(startTime);
   const e = toMinutes(endTime);
 
@@ -29,178 +35,207 @@ function findConflict({ venue, dateList, startTime, endTime, ignoreId = null }) 
   if (!Number.isFinite(s) || !Number.isFinite(e)) return { ok: false, message: "Invalid time format" };
   if (s >= e) return { ok: false, message: "End time must be after start time" };
 
-  for (const b of bookings) {
-    if (ignoreId && b.id === ignoreId) continue;
-    if (b.archived) continue; // ✅ ignore archived bookings
-    if (b.venue !== venue) continue;
+  if (!Array.isArray(dateList) || !dateList.length) return { ok: true };
 
-    for (const d of dateList) {
-      if (!bookingHasDate(b, d)) continue;
+  const placeholders = dateList.map(() => "?").join(",");
+  const params = [venue, ...dateList];
 
-      const bs = toMinutes(b.startTime);
-      const be = toMinutes(b.endTime);
-      if (!Number.isFinite(bs) || !Number.isFinite(be)) continue;
+  let sql = `
+    SELECT b.booking_id, b.venue, b.start_time, b.end_time, bd.booking_date
+    FROM bookings b
+    JOIN booking_dates bd ON bd.booking_id = b.booking_id
+    WHERE b.archived = 0
+      AND b.venue = ?
+      AND bd.booking_date IN (${placeholders})
+  `;
+  if (ignoreId) {
+    sql += ` AND b.booking_id <> ?`;
+    params.push(ignoreId);
+  }
 
-      if (rangesOverlap(s, e, bs, be)) {
-        return {
-          ok: false,
-          message: `Schedule conflict: ${venue} already booked on ${d} (${b.startTime} - ${b.endTime}).`,
-          conflict: { id: b.id, date: d, startTime: b.startTime, endTime: b.endTime, venue: b.venue },
-        };
-      }
+  const [rows] = await pool.query(sql, params);
+
+  for (const r of rows) {
+    const bs = toMinutes(String(r.start_time).slice(0, 5));
+    const be = toMinutes(String(r.end_time).slice(0, 5));
+    if (!Number.isFinite(bs) || !Number.isFinite(be)) continue;
+
+    if (rangesOverlap(s, e, bs, be)) {
+      return {
+        ok: false,
+        message: `Schedule conflict: ${venue} already reserved on ${r.booking_date} (${String(r.start_time).slice(0, 5)} - ${String(r.end_time).slice(0, 5)}).`,
+        conflict: {
+          id: r.id,
+          date: r.booking_date,
+          venue: r.venue,
+          startTime: String(r.start_time).slice(0, 5),
+          endTime: String(r.end_time).slice(0, 5),
+        },
+      };
     }
   }
 
   return { ok: true };
 }
 
-// GET all bookings
-router.get("/", (req, res) => res.json(bookings));
+// Format DB booking into frontend shape
+async function hydrateBooking(b) {
+  const dates = await getBookingDates(b.booking_id);
 
-router.post("/", (req, res) => {
+  const amount = Number(b.total_amount);
+
+  // your schema has no final_amount now, so finalAmount == amount
+  const finalAmount = amount;
+
+  let parsedResources = null;
+  if (b.resources) {
+    if (typeof b.resources === "string") {
+      try {
+        parsedResources = JSON.parse(b.resources);
+      } catch (e) {
+        parsedResources = null; // don't crash GET
+      }
+    } else {
+      parsedResources = b.resources;
+    }
+  }
+
+  return {
+    id: b.booking_id,
+    requestedBy: b.requested_by,
+    eventTypeId: null,
+    eventName: b.event_name,
+    venue: b.venue,
+    date: String(b.primary_date),
+    dates: dates.map((d) => String(d)),
+    startTime: String(b.start_time).slice(0, 5),
+    endTime: String(b.end_time).slice(0, 5),
+    durationHours: Number(b.duration_hours),
+
+    amount,
+    finalAmount,
+
+    resources: parsedResources,
+
+    archived: !!b.archived,
+    createdAt: b.created_at ? new Date(b.created_at).toISOString() : null,
+    updatedAt: b.updated_at ? new Date(b.updated_at).toISOString() : null,
+  };
+}
+
+// ---------- routes ----------
+
+// GET all bookings
+router.get("/", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM bookings ORDER BY primary_date DESC, start_time DESC`
+    );
+    const hydrated = [];
+    for (const b of rows) hydrated.push(await hydrateBooking(b));
+    res.json(hydrated);
+  } catch (e) {
+    console.error("GET /api/bookings error:", e);
+    res.status(500).json({
+      message: "Failed to load bookings.",
+      error: e.message,
+      code: e.code,
+    });
+  }
+});
+
+// CREATE booking (multi-date)
+router.post("/", async (req, res) => {
   const {
     requestedBy,
-
-    // can be null for Others
-    eventTypeId,
-    // required for Others
     eventName,
     venue,
-    date,          // "YYYY-MM-DD"
+    date,
     dates,
-    startTime,     // "HH:mm"
-    endTime,       // "HH:mm"
-    durationHours, // number
+    startTime,
+    endTime,
+    durationHours,
 
-    // pricing (frontend may send)
     amount,
-    discountPct,
-    discountValue,
-    finalAmount,
-    donation,
-    resources, // {chairs, tables, aircon, lights, sounds, led}
+    resources,
   } = req.body || {};
 
-  // ---- basic required fields ----
-  const dateList = Array.isArray(dates) && dates.length
-    ? dates.filter(Boolean)
-    : (date ? [date] : []);
+  const dateList =
+    Array.isArray(dates) && dates.length ? dates.filter(Boolean) : date ? [date] : [];
 
-  if (!requestedBy || !venue || !dateList.length || !startTime || !endTime) {
+  if (
+    !requestedBy?.trim() ||
+    !eventName?.trim() ||
+    !venue ||
+    !dateList.length ||
+    !startTime ||
+    !endTime
+  ) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  // ✅ prevent same venue + overlapping time on same date
-  const conflictCheck = findConflict({ venue, dateList, startTime, endTime });
-  if (!conflictCheck.ok) {
-    return res.status(409).json({ message: conflictCheck.message, conflict: conflictCheck.conflict });
+  const computedAmount = Number(amount);
+  if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
+    return res.status(400).json({ message: "Amount is required" });
   }
 
-  // ---- resolve event ----
-  const hasEventType = !!eventTypeId;
-  const hasCustomName = !!(eventName && String(eventName).trim());
-
-  let evt = null;
-  let resolvedEventName = "";
-
-  if (hasEventType) {
-    evt = eventTypes.find((e) => e.id === eventTypeId);
-    if (!evt) return res.status(400).json({ message: "Invalid eventTypeId" });
-    resolvedEventName = evt.name;
-  } else {
-    // Others/custom event
-    if (!hasCustomName) {
-      return res.status(400).json({ message: "Missing eventName for Others" });
+  try {
+    const conflict = await findConflict({ venue, dateList, startTime, endTime });
+    if (!conflict.ok) {
+      return res.status(409).json({ message: conflict.message, conflict: conflict.conflict });
     }
-    resolvedEventName = String(eventName).trim();
+
+    const id = genId("bk");
+    const safeDuration = Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
+    const primaryDate = dateList[0];
+
+    // No discounts/donations: final_amount == amount
+    await pool.query(
+      `INSERT INTO bookings
+      (booking_id, requested_by, event_name, venue, primary_date, start_time, end_time, duration_hours,
+        total_amount, resources, archived)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      [
+        id,
+        requestedBy.trim(),
+        eventName.trim(),
+        venue,
+        primaryDate,
+        startTime,
+        endTime,
+        safeDuration,
+        computedAmount,
+        resources ? JSON.stringify(resources) : null,
+      ]
+    );
+
+    // insert booking dates
+    const placeholders = dateList.map(() => "(?, ?)").join(", ");
+    const flatParams = dateList.flatMap((d) => [id, d]);
+
+    await pool.query(
+      `INSERT INTO booking_dates (booking_id, booking_date) VALUES ${placeholders}`,
+      flatParams
+    );
+
+    const [rows] = await pool.query(
+      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
+      [id]
+    );
+    const created = await hydrateBooking(rows[0]);
+    return res.json(created);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Reservation failed." });
   }
-
-  // ---- normalize duration ----
-  const safeDurationHours = Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
-
-  // ---- pricing rules ----
-  // If eventTypeId is present: calculate amount from server (preferred),
-  // but allow client "amount" to override if you want to keep manual pricing.
-  // For Others: require a valid client amount.
-  let computedAmount = 0;
-
-  if (evt) {
-    computedAmount = calcAmount(evt, safeDurationHours);
-
-    // If frontend sends amount manually, you can choose whether to override server calc.
-    // Keep this line if you want manual amount to be respected:
-    if (Number(amount || 0) > 0) computedAmount = Number(amount);
-  } else {
-    // Others/custom event -> require amount
-    if (Number(amount || 0) <= 0) {
-      return res.status(400).json({ message: "Amount is required for Others" });
-    }
-    computedAmount = Number(amount);
-  }
-
-  const safeDiscountPct =
-    Number.isFinite(Number(discountPct)) ? Math.min(100, Math.max(0, Number(discountPct))) : 0;
-
-  // If client sent discountValue/finalAmount, we'll compute server-side anyway for consistency.
-  const computedDiscountValue = Math.round((computedAmount * safeDiscountPct) / 100);
-  const computedFinalAmount = Math.max(0, computedAmount - computedDiscountValue);
-
-  const safeDonation = Math.max(0, Number(donation || 0));
-
-  // ---- resources ----
-  const resolvedResources = resources || evt?.defaultResources || {
-    chairs: 0,
-    tables: 0,
-    aircon: false,
-    lights: true,
-    sounds: false,
-    led: false,
-  };
-
-  const booking = {
-    id: genId("bk"),
-    requestedBy,
-
-    eventTypeId: evt ? eventTypeId : null,
-    eventName: resolvedEventName,
-    venue,
-    date: dateList[0],   // ✅ keep a primary date
-    dates: dateList,     // ✅ store all selected dates
-    startTime,
-    endTime,
-    durationHours: safeDurationHours,
-
-    amount: computedAmount,
-    discountPct: safeDiscountPct,
-    discountValue: computedDiscountValue,
-    finalAmount: computedFinalAmount,
-    donation: safeDonation,
-    resources: resolvedResources,
-    createdAt: new Date().toISOString(),
-    archived: false,
-  };
-
-  bookings.push(booking);
-
-  addAudit("BOOKING_CREATED", {
-    id: booking.id,
-    eventName: booking.eventName,
-    date: booking.date,
-  });
-
-  return res.json(booking);
 });
 
-// UPDATE booking
-router.put("/:id", (req, res) => {
-  const idx = bookings.findIndex((b) => b.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: "Booking not found" });
-
-  const existing = bookings[idx];
+// UPDATE booking (single date edit)
+router.put("/:id", async (req, res) => {
+  const id = req.params.id;
 
   const {
     requestedBy,
-    eventTypeId,
     eventName,
     venue,
     date,
@@ -208,135 +243,135 @@ router.put("/:id", (req, res) => {
     endTime,
     durationHours,
     amount,
-    discountPct,
-    donation,
     resources,
     archived,
   } = req.body || {};
 
-  // required
-  if (!requestedBy || !venue || !date || !startTime || !endTime) {
+  if (!requestedBy?.trim() || !eventName?.trim() || !venue || !date || !startTime || !endTime) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  // ✅ prevent same venue + overlapping time on same date (ignore self)
-  const conflictCheck = findConflict({
-    venue,
-    dateList: [date],
-    startTime,
-    endTime,
-    ignoreId: req.params.id,
-  });
-  if (!conflictCheck.ok) {
-    return res.status(409).json({ message: conflictCheck.message, conflict: conflictCheck.conflict });
+  const computedAmount = Number(amount);
+  if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
+    return res.status(400).json({ message: "Amount is required" });
   }
 
-  // resolve event
-  const hasEventType = !!eventTypeId;
-  const hasCustomName = !!(eventName && String(eventName).trim());
+  try {
+    const [exists] = await pool.query(
+      `SELECT booking_id FROM bookings WHERE booking_id = ? LIMIT 1`,
+      [id]
+    );
+    if (!exists.length) return res.status(404).json({ message: "Booking not found" });
 
-  let evt = null;
-  let resolvedEventName = "";
-
-  if (hasEventType) {
-    evt = eventTypes.find((e) => e.id === eventTypeId);
-    if (!evt) return res.status(400).json({ message: "Invalid eventTypeId" });
-    resolvedEventName = evt.name;
-  } else {
-    if (!hasCustomName) {
-      return res.status(400).json({ message: "Missing eventName for Others" });
+    const conflict = await findConflict({
+      venue,
+      dateList: [date],
+      startTime,
+      endTime,
+      ignoreId: id,
+    });
+    if (!conflict.ok) {
+      return res.status(409).json({ message: conflict.message, conflict: conflict.conflict });
     }
-    resolvedEventName = String(eventName).trim();
+
+    const safeDuration = Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
+
+    await pool.query(
+      `UPDATE bookings
+      SET requested_by=?, event_name=?, venue=?, primary_date=?, start_time=?, end_time=?, duration_hours=?,
+          total_amount=?, resources=?, archived=?
+      WHERE booking_id=?`,
+      [
+        requestedBy.trim(),
+        eventName.trim(),
+        venue,
+        date,
+        startTime,
+        endTime,
+        safeDuration,
+        computedAmount,
+        resources ? JSON.stringify(resources) : null,
+        typeof archived === "boolean" ? (archived ? 1 : 0) : 0,
+        id,
+      ]
+    );
+
+    await pool.query(`DELETE FROM booking_dates WHERE booking_id = ?`, [id]);
+    await pool.query(
+      `INSERT INTO booking_dates (booking_id, booking_date) VALUES (?, ?)`,
+      [id, date]
+    );
+
+    const [rows] = await pool.query(
+      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
+      [id]
+    );
+    const updated = await hydrateBooking(rows[0]);
+    return res.json(updated);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Update failed." });
   }
-
-  const safeDurationHours =
-    Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
-
-  // pricing
-  let computedAmount = 0;
-
-  if (evt) {
-    computedAmount = calcAmount(evt, safeDurationHours);
-    if (Number(amount || 0) > 0) computedAmount = Number(amount);
-  } else {
-    if (Number(amount || 0) <= 0) {
-      return res.status(400).json({ message: "Amount is required for Others" });
-    }
-    computedAmount = Number(amount);
-  }
-
-  const safeDiscountPct =
-    Number.isFinite(Number(discountPct))
-      ? Math.min(100, Math.max(0, Number(discountPct)))
-      : 0;
-
-  const computedDiscountValue = Math.round((computedAmount * safeDiscountPct) / 100);
-  const computedFinalAmount = Math.max(0, computedAmount - computedDiscountValue);
-  const safeDonation = Math.max(0, Number(donation || 0));
-
-  const resolvedResources = resources || evt?.defaultResources || {
-    chairs: 0,
-    tables: 0,
-    aircon: false,
-    lights: true,
-    sounds: false,
-    led: false,
-  };
-
-  const updated = {
-    ...existing,
-    requestedBy,
-    venue: venue ?? existing.venue,
-    eventTypeId: evt ? eventTypeId : null,
-    eventName: resolvedEventName,
-    date,
-    startTime,
-    endTime,
-    durationHours: safeDurationHours,
-    amount: computedAmount,
-    discountPct: safeDiscountPct,
-    discountValue: computedDiscountValue,
-    finalAmount: computedFinalAmount,
-    donation: safeDonation,
-    resources: resolvedResources,
-    archived: typeof archived === "boolean" ? archived : (existing.archived ?? false),
-    updatedAt: new Date().toISOString(),
-  };
-
-  bookings[idx] = updated;
-
-  addAudit("BOOKING_UPDATED", { id: updated.id, date: updated.date, eventName: updated.eventName });
-  return res.json(updated);
 });
 
 // DELETE booking
-router.delete("/:id", (req, res) => {
-  const idx = bookings.findIndex((b) => b.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: "Booking not found" });
+router.delete("/:id", async (req, res) => {
+  const id = req.params.id;
 
-  const removed = bookings.splice(idx, 1)[0];
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
 
-  addAudit("BOOKING_DELETED", { id: removed.id, date: removed.date, eventName: removed.eventName });
-  return res.json({ ok: true });
+    // 1) delete booking_dates children
+    await conn.query(`DELETE FROM booking_dates WHERE booking_id = ?`, [id]);
+
+    // 2) delete bookings parent
+    const [result] = await conn.query(`DELETE FROM bookings WHERE booking_id = ?`, [id]);
+
+    await conn.commit();
+
+    if (!result.affectedRows) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    await conn.rollback();
+    console.error("DELETE /api/bookings/:id error:", e);
+    return res.status(500).json({ message: "Failed to delete reservation.", error: e.message });
+  } finally {
+    conn.release();
+  }
 });
 
-// ARCHIVE booking
-router.patch("/:id/archive", (req, res) => {
-  const idx = bookings.findIndex((b) => b.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: "Booking not found" });
+// ARCHIVE toggle
+router.patch("/:id/archive", async (req, res) => {
+  const id = req.params.id;
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ message: "Booking not found" });
 
-  // Toggle archive status
-  bookings[idx].archived = !bookings[idx].archived;
-  bookings[idx].updatedAt = new Date().toISOString();
+    const current = rows[0];
+    const next = current.archived ? 0 : 1;
 
-  addAudit("BOOKING_ARCHIVED", { 
-    id: bookings[idx].id, 
-    date: bookings[idx].date, 
-    eventName: bookings[idx].eventName,
-    archived: bookings[idx].archived 
-  });
-  
-  return res.json(bookings[idx]);
+    await pool.query(
+      `UPDATE bookings SET archived = ? WHERE booking_id = ?`,
+      [next, id]
+    );
+
+    const [fresh] = await pool.query(
+      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
+      [id]
+    );
+    const updated = await hydrateBooking(fresh[0]);
+    return res.json(updated);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: "Failed to archive reservation." });
+  }
 });
 
 module.exports = router;

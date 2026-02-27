@@ -1,16 +1,14 @@
-// General-Service-Office/backend/vite.config.js
+// General-Service-Office/backend/server.js
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
-const authRoutes = require("./src/routes/Backoffice/auth.routes");
-const eventTypesRoutes = require("./src/routes/eventTypes.routes");
+console.log("DB_HOST:", process.env.DB_HOST, "DB_NAME:", process.env.DB_NAME);
+
 const bookingsRoutes = require("./src/routes/bookings.routes");
-const adminRoutes = require("./src/routes/Backoffice/admin.routes");
 
 const app = express();
 
-// ✅ allow any localhost port (5173, 5174, etc.)
 app.use(
   cors({
     origin: [/^http:\/\/localhost(?::\d+)?$/, /^http:\/\/127\.0\.0\.1(?::\d+)?$/],
@@ -22,10 +20,8 @@ app.use(express.json());
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-app.use("/api/auth", authRoutes);
-app.use("/api/event-types", eventTypesRoutes);
+// ✅ only schedule page backend
 app.use("/api/bookings", bookingsRoutes);
-app.use("/api/admin", adminRoutes);
 
 const port = Number(process.env.PORT) || 4000;
 app.listen(port, () => console.log(`Backend running on http://localhost:${port}`));

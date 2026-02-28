@@ -100,8 +100,8 @@ function formatDateRange(booking) {
     ? booking.dates 
     : (booking.date ? [booking.date] : []);
   
-  if (dates.length === 0) return '—';
-  if (dates.length === 1) return dates[0];
+  if (dates.length === 0) return "—";
+  if (dates.length === 1) return dayjs(dates[0]).format("MMMM D, YYYY"); // Month-Day-Year
   
   // Parse all dates
   const parsedDates = dates.map(d => dayjs(d));
@@ -998,30 +998,37 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
             sx={{ mb: 2 }}
           />
 
-          <TextField
-            fullWidth
-            label="Event Name"
-            value={eventName}
-            onChange={(e) => setEventName(e.target.value.slice(0, LIMITS.otherEventName))}
-            inputProps={{ maxLength: LIMITS.otherEventName }}
-            helperText={
-              <span>
-                Example: <b>Birthday</b>, <b>Wedding</b>, <b>Meeting</b> • {eventName.length}/{LIMITS.otherEventName}
-              </span>
-            }
-            sx={{ mb: 2 }}
-          />
+{/* Combined Row: Event Name | Venue Dropdown */}
+<Box sx={{ 
+  display: 'grid', 
+  gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, 
+  gap: 2, 
+  mb: 2 
+}}>
+  <TextField
+    fullWidth
+    label="Event Name"
+    value={eventName}
+    onChange={(e) => setEventName(e.target.value.slice(0, LIMITS.otherEventName))}
+    inputProps={{ maxLength: LIMITS.otherEventName }}
+    helperText={
+      <span>
+        Example: <b>Birthday</b>, <b>Wedding</b> • {eventName.length}/{LIMITS.otherEventName}
+      </span>
+    }
+  />
 
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>Venue</InputLabel>
-            <Select label="Venue" value={venue} onChange={(e) => setVenue(e.target.value)}>
-              {VENUES.map((v) => (
-                <MenuItem key={v} value={v}>
-                  {v}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+  <FormControl fullWidth>
+    <InputLabel>Venue</InputLabel>
+    <Select label="Venue" value={venue} onChange={(e) => setVenue(e.target.value)}>
+      {VENUES.map((v) => (
+        <MenuItem key={v} value={v}>
+          {v}
+        </MenuItem>
+      ))}
+    </Select>
+  </FormControl>
+</Box>
 
           {/* ✅ Time Section */}
           <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -1279,7 +1286,16 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
 }
 
 /** --------- Inline BookingDetailsDialog --------- */
-function BookingDetailsDialog({ open, booking, onClose }) {
+function BookingDetailsDialog({
+  open,
+  booking,
+  onClose,
+  onEdit,
+  onArchive,
+  onDelete,
+  onPrint,
+  onDownload,
+}) {
   if (!booking) return null;
 
   const r = booking.resources || {};
@@ -1317,7 +1333,7 @@ function BookingDetailsDialog({ open, booking, onClose }) {
               <Box>
                 <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Time</Typography>
                 <Typography sx={{ fontWeight: 800 }}>
-                  {booking.startTime ?? "—"} - {booking.endTime ?? "—"}
+                  {formatTime12h(booking.startTime)} - {formatTime12h(booking.endTime)}
                 </Typography>
               </Box>
 
@@ -1360,38 +1376,101 @@ function BookingDetailsDialog({ open, booking, onClose }) {
             </Box>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
-            <Typography sx={{ fontWeight: 900, mb: 1 }}>Pricing</Typography>
+          {/* ✅ Resources | Pricing (side-by-side) */}
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", sm: "minmax(0, 1fr) 220px" }, // ✅ pricing fixed
+              gap: 1.25,
+              alignItems: "start",
+            }}
+          >
+            {/* Resources */}
+            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+              <Typography sx={{ fontWeight: 900, mb: 0.75 }}>Resources</Typography>
 
-            <Box>
-              <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Amount</Typography>
-              <Typography sx={{ fontWeight: 900, fontSize: 18, color: "primary.main" }}>
-                {money(booking.amount)}
-              </Typography>
-            </Box>
-          </Paper>
+              {/* compact chairs/tables */}
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 1,
+                  alignItems: "stretch",
+                }}
+              >
+                <Box
+                  sx={{
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.75,
+                  }}
+                >
+                  <Typography sx={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>
+                    Chairs
+                  </Typography>
+                  <Typography sx={{ fontWeight: 900, fontSize: 20, lineHeight: 1.1 }}>
+                    {r.chairs ?? 0}
+                  </Typography>
+                </Box>
 
-          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
-            <Typography sx={{ fontWeight: 900, mb: 1 }}>Resources</Typography>
-
-            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-              <Box>
-                <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Chairs</Typography>
-                <Typography sx={{ fontWeight: 800 }}>{r.chairs ?? 0}</Typography>
+                <Box
+                  sx={{
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.75,
+                  }}
+                >
+                  <Typography sx={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>
+                    Tables
+                  </Typography>
+                  <Typography sx={{ fontWeight: 900, fontSize: 20, lineHeight: 1.1 }}>
+                    {r.tables ?? 0}
+                  </Typography>
+                </Box>
               </Box>
-              <Box>
-                <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Tables</Typography>
-                <Typography sx={{ fontWeight: 800 }}>{r.tables ?? 0}</Typography>
-              </Box>
 
-              <Box sx={{ gridColumn: "1 / -1", display: "flex", gap: 1, flexWrap: "wrap", mt: 0.5 }}>
+              {/* compact toggles */}
+              <Box
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 0.75,
+                  mt: 1,
+                }}
+              >
                 <Chip size="small" label={`Aircon: ${r.aircon ? "Yes" : "No"}`} />
                 <Chip size="small" label={`Lights: ${r.lights ? "Yes" : "No"}`} />
                 <Chip size="small" label={`Sounds: ${r.sounds ? "Yes" : "No"}`} />
                 <Chip size="small" label={`LED: ${r.led ? "Yes" : "No"}`} />
               </Box>
-            </Box>
-          </Paper>
+            </Paper>
+
+            {/* Pricing */}
+            <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+              <Typography sx={{ fontWeight: 900, mb: 0.75 }}>Pricing</Typography>
+
+              <Box
+                sx={{
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: 1,
+                  px: 1,
+                  py: 1,
+                }}
+              >
+                <Typography sx={{ fontSize: 11, opacity: 0.7, lineHeight: 1 }}>
+                  Amount
+                </Typography>
+                <Typography sx={{ fontWeight: 900, fontSize: 20, lineHeight: 1.1, color: "primary.main" }}>
+                  {money(booking.amount)}
+                </Typography>
+              </Box>
+            </Paper>
+          </Box>
 
           <Box sx={{ display: "flex", justifyContent: "space-between", opacity: 0.7 }}>
             <Typography sx={{ fontSize: 12 }}>
@@ -1404,8 +1483,83 @@ function BookingDetailsDialog({ open, booking, onClose }) {
         </Box>
       </DialogContent>
 
-      <DialogActions>
-        <Button onClick={onClose} variant="contained" sx={{ fontWeight: 800 }}>
+      <DialogActions
+        sx={{
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 1,
+        }}
+      >
+        {/* LEFT: actions */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            flexWrap: "nowrap",        // ✅ force one line
+            overflowX: "auto",         // ✅ if too tight, allow sideways scroll
+            maxWidth: "100%",
+            pr: 1,
+            "&::-webkit-scrollbar": { height: 6 },
+          }}
+        >
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<PrintIcon />}
+            sx={{ whiteSpace: "nowrap" }}
+            onClick={() => onPrint?.(booking)}
+          >
+            Print
+          </Button>
+
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<DownloadIcon />}
+            sx={{ whiteSpace: "nowrap" }}
+            onClick={() => onDownload?.(booking)}
+          >
+            Download
+          </Button>
+
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<EditIcon />}
+            sx={{ whiteSpace: "nowrap" }}
+            onClick={() => onEdit?.(booking)}
+          >
+            Edit
+          </Button>
+
+          <Button
+            size="small"
+            variant="outlined"
+            color={booking?.archived ? "success" : "warning"}
+            startIcon={<ArchiveIcon />}
+            sx={{ whiteSpace: "nowrap" }}
+            onClick={() => onArchive?.(booking)}
+          >
+            {booking?.archived ? "Unarchive" : "Archive"}
+          </Button>
+
+          {booking?.archived ? (
+            <Button
+              size="small"
+              variant="contained"
+              color="error"
+              startIcon={<DeleteIcon />}
+              sx={{ whiteSpace: "nowrap" }}
+              onClick={() => onDelete?.(booking)}
+            >
+              Delete
+            </Button>
+          ) : null}
+        </Box>
+
+        {/* RIGHT: close */}
+        <Button onClick={onClose} variant="contained" size="small" sx={{ whiteSpace: "nowrap" }}>
           Close
         </Button>
       </DialogActions>
@@ -1717,17 +1871,20 @@ function BookingHistory({
                       </IconButton>
                     </Tooltip>
 
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDelete?.(b);
-                        }}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                    {/* ✅ Delete only appears when ARCHIVED */}
+                    {b.archived ? (
+                      <Tooltip title="Delete (Archived only)">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete?.(b);
+                          }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))
@@ -1877,6 +2034,14 @@ export default function SchedulePage() {
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [detailsBooking, setDetailsBooking] = React.useState(null);
 
+  // ✅ keep the open Details dialog in sync with latest bookings state
+  React.useEffect(() => {
+    if (!detailsBooking?.id) return;
+
+    const fresh = (bookings || []).find((x) => x?.id === detailsBooking.id);
+    if (fresh) setDetailsBooking(fresh);
+  }, [bookings, detailsBooking?.id]); // only reacts to bookings updates + current id
+
   const handleReservedDayClick = React.useCallback((list, dateStr) => {
   const bookingsForDay = Array.isArray(list) ? list : [];
 
@@ -1922,8 +2087,8 @@ export default function SchedulePage() {
 
   const handleDeleteBooking = async (b) => {
     if (!b?.id) return;
-    
-    // Replace window.confirm with dialog state
+    if (!b.archived) return;
+
     setDeleteDialogBooking(b);
     setDeleteDialogOpen(true);
   };
@@ -1953,10 +2118,20 @@ export default function SchedulePage() {
   // Delete confirmation handlers
   const handleConfirmDelete = async () => {
     if (!deleteDialogBooking?.id) return;
-    
+
     try {
       await axios.delete(`${API}/bookings/${deleteDialogBooking.id}`);
+
+      // ✅ remove from table/history
       setBookings((prev) => prev.filter((x) => x.id !== deleteDialogBooking.id));
+
+      // ✅ NEW: if the Details dialog is showing the same booking, close it
+      if (detailsBooking?.id === deleteDialogBooking.id) {
+        setDetailsOpen(false);
+        setDetailsBooking(null);
+      }
+
+      // ✅ close delete dialog
       setDeleteDialogOpen(false);
       setDeleteDialogBooking(null);
     } catch (err) {
@@ -2112,6 +2287,16 @@ export default function SchedulePage() {
           setDetailsOpen(false);
           setDetailsBooking(null);
         }}
+        onEdit={(b) => {
+          // optional: close details first
+          setDetailsOpen(false);
+          setDetailsBooking(null);
+          handleEditBooking(b);
+        }}
+        onArchive={(b) => handleArchiveBooking(b)}
+        onDelete={(b) => handleDeleteBooking(b)}
+        onPrint={(b) => openPrint(b)}
+        onDownload={(b) => openDownload(b)}
       />
 
       {/* ✅ Print Dialog */}

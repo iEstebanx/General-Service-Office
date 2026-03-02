@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   total_amount INTEGER NOT NULL,
   resources TEXT,                       -- JSON string
 
-  status TEXT NOT NULL DEFAULT 'ACTIVE', -- ACTIVE | SUBMITTED | CANCELED | ARCHIVED
+  status TEXT NOT NULL DEFAULT 'SUBMITTED', -- ACTIVE | SUBMITTED | CANCELED | ARCHIVED
   archived INTEGER NOT NULL DEFAULT 0,   -- 0/1 (kept for backward compatibility)
 
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS bookings (
 CREATE INDEX IF NOT EXISTS idx_venue ON bookings (venue);
 CREATE INDEX IF NOT EXISTS idx_primary_date ON bookings (primary_date);
 CREATE INDEX IF NOT EXISTS idx_archived ON bookings (archived);
-CREATE INDEX IF NOT EXISTS idx_status ON bookings (status);
 
 CREATE TABLE IF NOT EXISTS booking_dates (
   booking_id TEXT NOT NULL,

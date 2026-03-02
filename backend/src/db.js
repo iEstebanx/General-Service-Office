@@ -1,19 +1,18 @@
 // backend/src/db.js
-const mysql = require("mysql2/promise");
+const Database = require("better-sqlite3");
+const fs = require("fs");
+const path = require("path");
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  port: Number(process.env.DB_PORT || 3306),
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+function initDb(dbPath) {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
 
-  // ✅ strongly recommended
-  dateStrings: true,
-  decimalNumbers: true,
-});
+  db.pragma("foreign_keys = ON");
 
-module.exports = pool;
+  const schemaPath = path.join(__dirname, "schema.sql");
+  db.exec(fs.readFileSync(schemaPath, "utf8"));
+
+  return db;
+}
+
+module.exports = { initDb };

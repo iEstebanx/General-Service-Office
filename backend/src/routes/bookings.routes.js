@@ -1,6 +1,19 @@
 // backend/src/routes/bookings.routes.js
 const router = require("express").Router();
-const pool = require("../db");
+
+const STATUS = {
+  ACTIVE: "ACTIVE",
+  SUBMITTED: "SUBMITTED",
+  CANCELED: "CANCELED",
+  ARCHIVED: "ARCHIVED",
+};
+
+function normalizeStatus(raw) {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (!s) return null;
+  if (!Object.values(STATUS).includes(s)) return null;
+  return s;
+}
 
 // ---------- helpers ----------
 function toMinutes(hhmm = "") {
@@ -17,17 +30,46 @@ function genId(prefix = "bk") {
     .slice(2, 9)}`;
 }
 
+// Venue normalizer: frontend may send actual venue text (when "Others" is chosen)
+// We prevent saving literal "Others" and enforce trimming.
+function normalizeVenue(raw, { maxLen = 80 } = {}) {
+  const v = String(raw ?? "").trim();
+
+  // Disallow empty or placeholder value
+  if (!v) return { ok: false, venue: "", message: "Venue is required" };
+  if (v.toLowerCase() === "others") {
+    return { ok: false, venue: "", message: 'Please specify the Venue (do not send "Others").' };
+  }
+
+  // Optional length limit
+  if (v.length > maxLen) {
+    return { ok: false, venue: "", message: `Venue is too long (max ${maxLen} characters).` };
+  }
+
+  return { ok: true, venue: v };
+}
+
+// DB getter (SQLite)
+function getDb(req) {
+  return req.app.locals.db;
+}
+
 // Reads all dates for a booking
-async function getBookingDates(bookingId) {
-  const [rows] = await pool.query(
-    `SELECT booking_date FROM booking_dates WHERE booking_id = ? ORDER BY booking_date ASC`,
-    [bookingId]
-  );
+function getBookingDates(db, bookingId) {
+  const rows = db
+    .prepare(
+      `SELECT booking_date
+       FROM booking_dates
+       WHERE booking_id = ?
+       ORDER BY booking_date ASC`
+    )
+    .all(bookingId);
+
   return rows.map((r) => r.booking_date);
 }
 
 // Conflict checker: same venue + same date + overlapping time, ignore archived, optionally ignore booking id
-async function findConflict({ venue, dateList, startTime, endTime, ignoreId = null }) {
+function findConflict(db, { venue, dateList, startTime, endTime, ignoreId = null }) {
   const s = toMinutes(startTime);
   const e = toMinutes(endTime);
 
@@ -37,23 +79,26 @@ async function findConflict({ venue, dateList, startTime, endTime, ignoreId = nu
 
   if (!Array.isArray(dateList) || !dateList.length) return { ok: true };
 
-  const placeholders = dateList.map(() => "?").join(",");
-  const params = [venue, ...dateList];
+  const placeholders = dateList.map(() => "?").join(", ");
 
   let sql = `
     SELECT b.booking_id, b.venue, b.start_time, b.end_time, bd.booking_date
     FROM bookings b
     JOIN booking_dates bd ON bd.booking_id = b.booking_id
     WHERE b.archived = 0
+      AND UPPER(COALESCE(b.status, 'ACTIVE')) NOT IN ('CANCELED', 'ARCHIVED')
       AND b.venue = ?
       AND bd.booking_date IN (${placeholders})
   `;
+
+  const params = [venue, ...dateList];
+
   if (ignoreId) {
     sql += ` AND b.booking_id <> ?`;
     params.push(ignoreId);
   }
 
-  const [rows] = await pool.query(sql, params);
+  const rows = db.prepare(sql).all(...params);
 
   for (const r of rows) {
     const bs = toMinutes(String(r.start_time).slice(0, 5));
@@ -65,7 +110,7 @@ async function findConflict({ venue, dateList, startTime, endTime, ignoreId = nu
         ok: false,
         message: `Schedule conflict: ${venue} already reserved on ${r.booking_date} (${String(r.start_time).slice(0, 5)} - ${String(r.end_time).slice(0, 5)}).`,
         conflict: {
-          id: r.id,
+          id: r.booking_id,
           date: r.booking_date,
           venue: r.venue,
           startTime: String(r.start_time).slice(0, 5),
@@ -79,12 +124,10 @@ async function findConflict({ venue, dateList, startTime, endTime, ignoreId = nu
 }
 
 // Format DB booking into frontend shape
-async function hydrateBooking(b) {
-  const dates = await getBookingDates(b.booking_id);
+function hydrateBooking(db, b) {
+  const dates = getBookingDates(db, b.booking_id);
 
   const amount = Number(b.total_amount);
-
-  // your schema has no final_amount now, so finalAmount == amount
   const finalAmount = amount;
 
   let parsedResources = null;
@@ -93,7 +136,7 @@ async function hydrateBooking(b) {
       try {
         parsedResources = JSON.parse(b.resources);
       } catch (e) {
-        parsedResources = null; // don't crash GET
+        parsedResources = null;
       }
     } else {
       parsedResources = b.resources;
@@ -117,6 +160,7 @@ async function hydrateBooking(b) {
 
     resources: parsedResources,
 
+    status: (b.status ? String(b.status).toUpperCase() : null),
     archived: !!b.archived,
     createdAt: b.created_at ? new Date(b.created_at).toISOString() : null,
     updatedAt: b.updated_at ? new Date(b.updated_at).toISOString() : null,
@@ -125,27 +169,46 @@ async function hydrateBooking(b) {
 
 // ---------- routes ----------
 
-// GET all bookings
-router.get("/", async (req, res) => {
+// GET bookings (optional filter by date=YYYY-MM-DD)
+router.get("/", (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM bookings ORDER BY primary_date DESC, start_time DESC`
-    );
-    const hydrated = [];
-    for (const b of rows) hydrated.push(await hydrateBooking(b));
-    res.json(hydrated);
+    const db = getDb(req);
+    const { date } = req.query;
+
+    // validate date if provided
+    if (date != null) {
+      const d = String(date).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        return res.status(400).json({ message: "Invalid date format. Use YYYY-MM-DD." });
+      }
+
+      // bookings that have that date in booking_dates
+      const rows = db.prepare(`
+        SELECT b.*
+        FROM bookings b
+        JOIN booking_dates bd ON bd.booking_id = b.booking_id
+        WHERE bd.booking_date = ?
+        GROUP BY b.booking_id
+        ORDER BY b.start_time ASC
+      `).all(d);
+
+      return res.json(rows.map((b) => hydrateBooking(db, b)));
+    }
+
+    // default: all bookings
+    const rows = db
+      .prepare(`SELECT * FROM bookings ORDER BY primary_date DESC, start_time DESC`)
+      .all();
+
+    res.json(rows.map((b) => hydrateBooking(db, b)));
   } catch (e) {
     console.error("GET /api/bookings error:", e);
-    res.status(500).json({
-      message: "Failed to load bookings.",
-      error: e.message,
-      code: e.code,
-    });
+    res.status(500).json({ message: "Failed to load bookings.", error: e.message });
   }
 });
 
 // CREATE booking (multi-date)
-router.post("/", async (req, res) => {
+router.post("/", (req, res) => {
   const {
     requestedBy,
     eventName,
@@ -155,32 +218,33 @@ router.post("/", async (req, res) => {
     startTime,
     endTime,
     durationHours,
-
     amount,
     resources,
+    status,
   } = req.body || {};
 
   const dateList =
     Array.isArray(dates) && dates.length ? dates.filter(Boolean) : date ? [date] : [];
 
-  if (
-    !requestedBy?.trim() ||
-    !eventName?.trim() ||
-    !venue ||
-    !dateList.length ||
-    !startTime ||
-    !endTime
-  ) {
+  const venueNorm = normalizeVenue(venue);
+  if (!venueNorm.ok) {
+    return res.status(400).json({ message: venueNorm.message });
+  }
+
+  if (!requestedBy?.trim() || !eventName?.trim() || !dateList.length || !startTime || !endTime) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   const computedAmount = Number(amount);
+  const finalStatus = normalizeStatus(status) || STATUS.SUBMITTED;
   if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
     return res.status(400).json({ message: "Amount is required" });
   }
 
   try {
-    const conflict = await findConflict({ venue, dateList, startTime, endTime });
+    const db = getDb(req);
+
+    const conflict = findConflict(db, { venue: venueNorm.venue, dateList, startTime, endTime });
     if (!conflict.ok) {
       return res.status(409).json({ message: conflict.message, conflict: conflict.conflict });
     }
@@ -189,49 +253,50 @@ router.post("/", async (req, res) => {
     const safeDuration = Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
     const primaryDate = dateList[0];
 
-    // No discounts/donations: final_amount == amount
-    await pool.query(
-      `INSERT INTO bookings
+    const insertBooking = db.prepare(`
+      INSERT INTO bookings
       (booking_id, requested_by, event_name, venue, primary_date, start_time, end_time, duration_hours,
-        total_amount, resources, archived)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-      [
+      total_amount, resources, status, archived)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `);
+
+    const insertBookingDate = db.prepare(`
+      INSERT INTO booking_dates (booking_id, booking_date) VALUES (?, ?)
+    `);
+
+    const tx = db.transaction(() => {
+      insertBooking.run(
         id,
         requestedBy.trim(),
         eventName.trim(),
-        venue,
+        venueNorm.venue,
         primaryDate,
         startTime,
         endTime,
         safeDuration,
         computedAmount,
         resources ? JSON.stringify(resources) : null,
-      ]
-    );
+        finalStatus
+      );
 
-    // insert booking dates
-    const placeholders = dateList.map(() => "(?, ?)").join(", ");
-    const flatParams = dateList.flatMap((d) => [id, d]);
+      for (const d of dateList) {
+        insertBookingDate.run(id, d);
+      }
+    });
 
-    await pool.query(
-      `INSERT INTO booking_dates (booking_id, booking_date) VALUES ${placeholders}`,
-      flatParams
-    );
+    tx();
 
-    const [rows] = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
-      [id]
-    );
-    const created = await hydrateBooking(rows[0]);
+    const createdRow = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    const created = hydrateBooking(db, createdRow);
     return res.json(created);
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ message: "Reservation failed." });
+    console.error("POST /api/bookings error:", e);
+    return res.status(500).json({ message: "Reservation failed.", error: e.message });
   }
 });
 
 // UPDATE booking (single date edit)
-router.put("/:id", async (req, res) => {
+router.put("/:id", (req, res) => {
   const id = req.params.id;
 
   const {
@@ -245,26 +310,32 @@ router.put("/:id", async (req, res) => {
     amount,
     resources,
     archived,
+    status,
   } = req.body || {};
 
-  if (!requestedBy?.trim() || !eventName?.trim() || !venue || !date || !startTime || !endTime) {
+  const venueNorm = normalizeVenue(venue);
+  if (!venueNorm.ok) {
+    return res.status(400).json({ message: venueNorm.message });
+  }
+
+  if (!requestedBy?.trim() || !eventName?.trim() || !date || !startTime || !endTime) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   const computedAmount = Number(amount);
+  const finalStatus = normalizeStatus(status) || STATUS.SUBMITTED;
   if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
     return res.status(400).json({ message: "Amount is required" });
   }
 
   try {
-    const [exists] = await pool.query(
-      `SELECT booking_id FROM bookings WHERE booking_id = ? LIMIT 1`,
-      [id]
-    );
-    if (!exists.length) return res.status(404).json({ message: "Booking not found" });
+    const db = getDb(req);
 
-    const conflict = await findConflict({
-      venue,
+    const exists = db.prepare(`SELECT booking_id FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    if (!exists) return res.status(404).json({ message: "Booking not found" });
+
+    const conflict = findConflict(db, {
+      venue: venueNorm.venue,
       dateList: [date],
       startTime,
       endTime,
@@ -276,101 +347,118 @@ router.put("/:id", async (req, res) => {
 
     const safeDuration = Number(durationHours || 1) > 0 ? Number(durationHours || 1) : 1;
 
-    await pool.query(
-      `UPDATE bookings
+    const updateBooking = db.prepare(`
+      UPDATE bookings
       SET requested_by=?, event_name=?, venue=?, primary_date=?, start_time=?, end_time=?, duration_hours=?,
-          total_amount=?, resources=?, archived=?
-      WHERE booking_id=?`,
-      [
+          total_amount=?, resources=?, status=?, archived=?
+      WHERE booking_id=?
+    `);
+
+    const deleteDates = db.prepare(`DELETE FROM booking_dates WHERE booking_id = ?`);
+    const insertDate = db.prepare(`INSERT INTO booking_dates (booking_id, booking_date) VALUES (?, ?)`);
+
+    const tx = db.transaction(() => {
+      updateBooking.run(
         requestedBy.trim(),
         eventName.trim(),
-        venue,
+        venueNorm.venue,
         date,
         startTime,
         endTime,
         safeDuration,
         computedAmount,
         resources ? JSON.stringify(resources) : null,
+        finalStatus,
         typeof archived === "boolean" ? (archived ? 1 : 0) : 0,
-        id,
-      ]
-    );
+        id
+      );
 
-    await pool.query(`DELETE FROM booking_dates WHERE booking_id = ?`, [id]);
-    await pool.query(
-      `INSERT INTO booking_dates (booking_id, booking_date) VALUES (?, ?)`,
-      [id, date]
-    );
+      deleteDates.run(id);
+      insertDate.run(id, date);
+    });
 
-    const [rows] = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
-      [id]
-    );
-    const updated = await hydrateBooking(rows[0]);
+    tx();
+
+    const updatedRow = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    const updated = hydrateBooking(db, updatedRow);
     return res.json(updated);
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ message: "Update failed." });
+    console.error("PUT /api/bookings/:id error:", e);
+    return res.status(500).json({ message: "Update failed.", error: e.message });
   }
 });
 
 // DELETE booking
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", (req, res) => {
   const id = req.params.id;
 
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
+    const db = req.app.locals.db;
+    const tx = db.transaction(() => {
+      db.prepare(`DELETE FROM booking_dates WHERE booking_id = ?`).run(id);
+      const info = db.prepare(`DELETE FROM bookings WHERE booking_id = ?`).run(id);
+      return info;
+    });
 
-    // 1) delete booking_dates children
-    await conn.query(`DELETE FROM booking_dates WHERE booking_id = ?`, [id]);
-
-    // 2) delete bookings parent
-    const [result] = await conn.query(`DELETE FROM bookings WHERE booking_id = ?`, [id]);
-
-    await conn.commit();
-
-    if (!result.affectedRows) {
-      return res.status(404).json({ message: "Booking not found" });
-    }
+    const info = tx();
+    if (!info.changes) return res.status(404).json({ message: "Booking not found" });
 
     return res.json({ ok: true });
   } catch (e) {
-    await conn.rollback();
     console.error("DELETE /api/bookings/:id error:", e);
     return res.status(500).json({ message: "Failed to delete reservation.", error: e.message });
-  } finally {
-    conn.release();
   }
 });
 
 // ARCHIVE toggle
-router.patch("/:id/archive", async (req, res) => {
+router.patch("/:id/archive", (req, res) => {
   const id = req.params.id;
+
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
-      [id]
-    );
-    if (!rows.length) return res.status(404).json({ message: "Booking not found" });
+    const db = getDb(req);
 
-    const current = rows[0];
-    const next = current.archived ? 0 : 1;
+    const current = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    if (!current) return res.status(404).json({ message: "Booking not found" });
 
-    await pool.query(
-      `UPDATE bookings SET archived = ? WHERE booking_id = ?`,
-      [next, id]
-    );
+    const nextArchived = current.archived ? 0 : 1;
 
-    const [fresh] = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`,
-      [id]
-    );
-    const updated = await hydrateBooking(fresh[0]);
+    // If archiving -> status becomes ARCHIVED
+    // If unarchiving -> status becomes ACTIVE (you can change to SUBMITTED if you prefer)
+    const nextStatus = nextArchived ? STATUS.ARCHIVED : STATUS.SUBMITTED;
+
+    db.prepare(`UPDATE bookings SET archived = ?, status = ? WHERE booking_id = ?`).run(nextArchived, nextStatus, id);
+
+    const fresh = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    const updated = hydrateBooking(db, fresh);
     return res.json(updated);
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ message: "Failed to archive reservation." });
+    console.error("PATCH /api/bookings/:id/archive error:", e);
+    return res.status(500).json({ message: "Failed to archive reservation.", error: e.message });
+  }
+});
+
+// CANCEL booking (mark as CANCELED)
+router.patch("/:id/cancel", (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const db = getDb(req);
+
+    const current = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    if (!current) return res.status(404).json({ message: "Booking not found" });
+
+    // If already archived, you can decide whether to block cancel:
+    // if (current.archived) return res.status(400).json({ message: "Cannot cancel an archived booking." });
+
+    // Mark as canceled (does NOT delete)
+    db.prepare(`UPDATE bookings SET status = ? WHERE booking_id = ?`).run(STATUS.CANCELED, id);
+
+    const fresh = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    const updated = hydrateBooking(db, fresh);
+    return res.json(updated);
+  } catch (e) {
+    console.error("PATCH /api/bookings/:id/cancel error:", e);
+    return res.status(500).json({ message: "Failed to cancel reservation.", error: e.message });
   }
 });
 

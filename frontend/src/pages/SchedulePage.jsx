@@ -68,6 +68,55 @@ import { useTheme } from "@mui/material/styles";
 // ✅ Use proxy: /api -> backend
 const API = "/api";
 
+/** --------- Status helpers --------- */
+const STATUS = {
+  SUBMITTED: "SUBMITTED",
+  CANCELED: "CANCELED",
+  ARCHIVED: "ARCHIVED",
+};
+
+// Priority for calendar coloring if multiple bookings exist on the same date
+const STATUS_PRIORITY = {
+  CANCELED: 4,
+  SUBMITTED: 3,
+  ACTIVE: 2,
+  ARCHIVED: 1,
+};
+
+function getBookingStatus(b) {
+  if (b?.status) return String(b.status).toUpperCase();
+  if (b?.archived) return STATUS.ARCHIVED;
+  if (b?.canceled) return STATUS.CANCELED;
+  return STATUS.SUBMITTED; // fallback
+}
+
+// Latest date of a booking (supports single date or multi-date)
+function getBookingLastDate(b) {
+  const ds = Array.isArray(b?.dates) && b.dates.length ? b.dates : (b?.date ? [b.date] : []);
+  if (!ds.length) return null;
+  return ds.map((d) => dayjs(d)).sort((a, c) => a.valueOf() - c.valueOf())[ds.length - 1];
+}
+
+// Hide cancel if event already ended (current date is past booking date)
+function isBookingPast(b) {
+  const last = getBookingLastDate(b);
+  if (!last) return false;
+  return dayjs().startOf("day").isAfter(last.startOf("day"), "day");
+}
+
+function getStatusChipProps(status) {
+  switch (status) {
+    case STATUS.SUBMITTED:
+      return { label: "SUBMITTED", color: "info", variant: "filled" };
+    case STATUS.CANCELED:
+      return { label: "CANCELED", color: "error", variant: "filled" };
+    case STATUS.ARCHIVED:
+      return { label: "ARCHIVED", color: "warning", variant: "filled" };
+    default:
+      return { label: "SUBMITTED", color: "info", variant: "filled" };
+  }
+}
+
 /** --------- Inline ResourceToggles --------- */
 const toggleItems = [
   { key: "aircon", label: "Aircon" },
@@ -81,6 +130,7 @@ const VENUES = [
   "Unlad Gymnasium",
   "Noveleta Plaza",
   "Noveleta Public Market Rooftop",
+  "Others",
 ];
 
 // ✅ input limits (adjust if needed)
@@ -301,7 +351,8 @@ function ResourceInputs({ resources, setResources }) {
 }
 
 /** --------- Inline CalendarSection (FIXED OVERFLOW & CENTERED YEAR) --------- */
-function CalendarSection({ 
+function CalendarSection({
+  calendarView,
   selectedDates, 
   onToggleDate, 
   onViewChange, 
@@ -360,35 +411,124 @@ function CalendarSection({
     const reservedList = dateStr && reservedByDate ? reservedByDate.get(dateStr) : null;
     const isReserved = !!(reservedList && reservedList.length);
 
+    // ✅ disable ONLY past days with NO reservation
+    const today = dayjs().startOf("day");
+    const isPast = day && day.isBefore(today, "day");
+
+    // ✅ allow clicking past days IF they are reserved (to view list)
+    const isDisabled = isPast && !isReserved;
+
+    // ✅ Decide day status for coloring:
+    // - If there is at least 1 non-canceled booking, ignore canceled for day color
+    // - Only show CANCELED if ALL are canceled
+    let dayStatus = null;
+    let displayList = reservedList || [];
+
+    if (displayList.length) {
+      const nonCanceled = displayList.filter((b) => getBookingStatus(b) !== STATUS.CANCELED);
+      const listForColor = nonCanceled.length ? nonCanceled : displayList;
+
+      const statuses = Array.from(new Set(listForColor.map(getBookingStatus)));
+      const isMultiStatus = statuses.length > 1;
+
+      dayStatus = isMultiStatus ? "MULTI" : statuses[0] || null;
+
+      // keep this so count/badge and other UI uses the same “meaningful” list
+      displayList = listForColor;
+    }
+
+    // ✅ style per status
+    let reservedStyle = {};
+
+    if (isReserved) {
+      switch (dayStatus) {
+        case STATUS.CANCELED:
+          reservedStyle = {
+            bgcolor: "rgba(239, 68, 68, 0.15)",
+            borderColor: "error.main",
+            color: "error.dark",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px",
+            "&:hover": { bgcolor: "rgba(239, 68, 68, 0.25)" },
+          };
+          break;
+
+        case STATUS.SUBMITTED:
+          reservedStyle = {
+            bgcolor: "rgba(2, 132, 199, 0.15)",
+            borderColor: "info.main",
+            color: "info.dark",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px",
+            "&:hover": { bgcolor: "rgba(2, 132, 199, 0.25)" },
+          };
+          break;
+
+        case STATUS.ARCHIVED:
+          reservedStyle = {
+            bgcolor: "rgba(245, 158, 11, 0.12)",
+            borderColor: "warning.main",
+            color: "warning.dark",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px",
+            "&:hover": { bgcolor: "rgba(245, 158, 11, 0.2)" },
+          };
+          break;
+
+        case "MULTI":
+          reservedStyle = {
+            // blended look: submitted blue + active indigo + warning amber
+            bgcolor: "transparent",
+            background: "linear-gradient(135deg, rgba(2,132,199,0.18) 0%, rgba(79,70,229,0.18) 50%, rgba(245,158,11,0.14) 100%)",
+            borderColor: "divider",
+            color: "text.primary",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
+            "&:hover": { filter: "brightness(0.96)" },
+          };
+          break;
+
+        // ACTIVE (default)
+        default:
+          reservedStyle = {
+            bgcolor: "rgba(79, 70, 229, 0.15)",
+            borderColor: "#4F46E5",
+            color: "#312E81",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px #4F46E5",
+            "&:hover": { bgcolor: "rgba(79, 70, 229, 0.25)" },
+          };
+      }
+    }
+
     return (
       <PickersDay
         {...other}
         day={day}
         outsideCurrentMonth={outsideCurrentMonth}
         selected={selected}
-        onDaySelect={() => {
+        disabled={isDisabled}
+        onClick={(e) => {
+          if (isDisabled) return;
+
+          // ✅ default behavior: reserved day opens list
           if (isReserved) {
-            // ✅ click reserved day -> show details dialog (same as history row click)
+            // optional: allow selection instead if user holds ALT (or SHIFT)
+            if (e?.altKey) {
+              onToggleDate?.(day);
+              return;
+            }
+
             onReservedDayClick?.(reservedList, dateStr);
             return;
           }
-          // ✅ normal day -> multi-select
+
+          // ✅ normal day: select
           onToggleDate?.(day);
         }}
         sx={{
-          // ✅ reserved day highlight
-          ...(isReserved
-            ? {
-                bgcolor: "rgba(79, 70, 229, 0.15)",   // soft indigo
-                borderColor: "#4F46E5",               // strong indigo border
-                color: "#312E81",                     // deep indigo text
-                fontWeight: 900,
-                boxShadow: "inset 0 0 0 1px #4F46E5", // subtle ring effect
-                "&:hover": {
-                  bgcolor: "rgba(79, 70, 229, 0.25)",
-                },
-              }
-            : {}),
+          // ✅ reserved day highlight (status-based)
+          ...reservedStyle,
 
           // ✅ selected styling (kept)
           ...(selected
@@ -399,10 +539,35 @@ function CalendarSection({
                 "&:hover": { bgcolor: "primary.dark" },
               }
             : {}),
+
+          ...(isReserved && (displayList?.length || 0) > 1
+            ? {
+                position: "relative",
+                "&::after": {
+                  content: `"${displayList.length}"`,
+                  position: "absolute",
+                  top: 4,
+                  right: 6,
+                  fontSize: "0.7rem",
+                  fontWeight: 900,
+                  lineHeight: 1,
+                  px: 0.6,
+                  py: 0.2,
+                  borderRadius: 999,
+                  bgcolor: "rgba(0,0,0,0.55)",
+                  color: "#fff",
+                },
+              }
+            : {}),
         }}
       />
     );
   }
+
+  const CAL_H = {
+    xs: 44 * 6 + 6 * 5 + 110,
+    sm: 56 * 6 + 6 * 5 + 110,
+  };
 
   return (
     <Box
@@ -413,9 +578,8 @@ function CalendarSection({
         border: "1px solid",
         borderColor: "divider",
         p: { xs: 1.5, sm: 2 },
-        height: cardHeight ? `${cardHeight + EXTRA_HEIGHT}px` : "auto",
-        transition: "height 180ms ease",
-        overflow: "hidden",
+        height: "auto",
+        overflow: "visible", // ✅ change this
       }}
     >
       <Box ref={contentRef}>
@@ -448,112 +612,133 @@ function CalendarSection({
         </Box>
 
         <LocalizationProvider dateAdapter={AdapterDayjs}>
-          <DateCalendar
-            // keep a "reference" date so calendar still knows where to display
-            value={calendarMonth}
-            onViewChange={onViewChange}
-            key={(calendarMonth ?? dayjs()).format("YYYY-MM")}
-            onMonthChange={(newMonth) => onMonthChange?.(newMonth)}
-            showDaysOutsideCurrentMonth={false}
-            minDate={dayjs()}
-            slots={{ day: MultiPickDay }}
-            sx={{
-              width: "100%",
-              maxWidth: "none",
-              m: 0,
-              "&.MuiDateCalendar-root": { height: "auto", overflow: "visible" },
+                        {/* ✅ LEGEND OUTSIDE CALENDAR CARD */}
+            <Box sx={{ mt: 2 }}>
+              <Typography sx={{ fontSize: 12, fontWeight: 900, opacity: 0.75, mb: 0.75 }}>
+                Legend
+              </Typography>
 
-              "& .MuiPickersYear-yearButton": {
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                textAlign: "center",
-                width: "100%",
-              },
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                <Chip size="small" label="Active" sx={{ fontWeight: 800, bgcolor: "rgba(79, 70, 229, 0.15)" }} />
+                <Chip size="small" label="Submitted" sx={{ fontWeight: 800, bgcolor: "rgba(2, 132, 199, 0.15)" }} />
+                <Chip size="small" label="Canceled" sx={{ fontWeight: 800, bgcolor: "rgba(239, 68, 68, 0.15)" }} />
+                <Chip size="small" label="Archived" sx={{ fontWeight: 800, bgcolor: "rgba(245, 158, 11, 0.12)" }} />
+                <Chip size="small" label="Multiple statuses" sx={{ fontWeight: 800 }} />
+                <Chip size="small" label="# of reservations" variant="outlined" sx={{ fontWeight: 800 }} />
+              </Stack>
+            </Box>
 
-              "& .MuiPickersYear-root": {
-                display: "flex",
-                justifyContent: "center",
+            <DateCalendar
+              fixedWeekNumber={6}
+              views={["year", "month", "day"]}
+              view={calendarView}
+              value={calendarMonth}
+              onViewChange={onViewChange}
+              onMonthChange={(newMonth) => {
+                onMonthChange?.(newMonth);
+                onViewChange?.("day");
+              }}
+              showDaysOutsideCurrentMonth={false}
+              slots={{ day: MultiPickDay }}
+              sx={{
                 width: "100%",
-              },
-
-              "& .MuiYearCalendar-root": {
-                display: "flex",
-                justifyContent: "center",
-                width: "100%",
-              },
-
-              "& .MuiPickersYear-view": {
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 1,
-                justifyItems: "center",
-                alignItems: "center",
-                width: "100%",
-              },
-
-              "& .MuiPickersSlideTransition-root": {
-                height: "auto !important",
-                overflow: "visible !important",
-              },
-              "& .MuiDayCalendar-slideTransition": {
-                height: "auto !important",
-                overflow: "visible !important",
-              },
-              "& .MuiDayCalendar-monthContainer": {
-                width: "100%",
-                height: "auto",
-              },
-
-              "& .MuiDayCalendar-header": {
-                display: "grid",
-                gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-                columnGap: "6px",
-                width: "100%",
+                maxWidth: "none",
                 m: 0,
-              },
-              "& .MuiDayCalendar-weekDayLabel": {
-                width: "100%",
-                fontWeight: 900,
-                opacity: 0.75,
-                fontSize: "0.85rem",
-                m: 0,
-                textAlign: "center",
-              },
 
-              "& .MuiDayCalendar-weekContainer": {
-                display: "grid",
-                gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-                columnGap: "6px",
-                width: "100%",
-                m: 0,
-                p: 0,
-                mb: "6px",
-              },
+                // ✅ ONLY force the big height for DAY view
+                ...(calendarView === "day"
+                  ? {
+                      height: CAL_H,
+                      minHeight: CAL_H,
 
-              "& .MuiPickersDay-root": {
-                width: "100%",
-                height: { xs: 44, sm: 56 },
-                borderRadius: 1,
-                m: 0,
-                p: 0,
-                boxSizing: "border-box",
-                border: "1px solid",
-                borderColor: "divider",
-                fontSize: "1rem",
-              },
+                      "& .MuiPickersSlideTransition-root": {
+                        minHeight: { xs: 44 * 6 + 6 * 5, sm: 56 * 6 + 6 * 5 },
+                        height: "auto",
+                        overflow: "visible",
+                      },
+                      "& .MuiDayCalendar-slideTransition": {
+                        minHeight: { xs: 44 * 6 + 6 * 5, sm: 56 * 6 + 6 * 5 },
+                        height: "auto",
+                        overflow: "visible",
+                      },
+                    }
+                  : {
+                      // ✅ YEAR / MONTH view: don't reserve extra space
+                      height: "auto",
+                      minHeight: 0,
+                    }),
 
-              "& .MuiPickersDay-hiddenDaySpacingFiller": {
-                width: "100%",
-                height: { xs: 44, sm: 56 },
-                borderRadius: 1,
-                boxSizing: "border-box",
-                border: "1px solid",
-                borderColor: "divider",
-                opacity: 0.35,
-              },
-            }}
-          />
+                // ✅ YEAR view: remove the "extra padding / right gutter / bottom space"
+                ...(calendarView === "year"
+                  ? {
+                      "& .MuiYearCalendar-root": {
+                        width: "100%",
+                        m: 0,
+                        p: 0,
+                        pr: 0,
+                        pb: 0,
+
+                        // the year list is scrollable; remove the gutter space
+                        overflowY: "auto",
+                      },
+                      "& .MuiPickersYear-yearButton": {
+                        width: "100%",
+                        mx: 0,
+                      },
+                    }
+                  : {}),
+
+                // keep your existing day grid styles below (header/week/day sizing)
+                "& .MuiDayCalendar-monthContainer": {
+                  width: "100%",
+                  display: "grid",
+                  rowGap: "6px",
+                },
+                "& .MuiDayCalendar-header": {
+                  display: "grid",
+                  gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+                  columnGap: "6px",
+                  width: "100%",
+                  m: 0,
+                },
+                "& .MuiDayCalendar-weekDayLabel": {
+                  width: "100%",
+                  fontWeight: 900,
+                  opacity: 0.75,
+                  fontSize: "0.85rem",
+                  m: 0,
+                  textAlign: "center",
+                },
+                "& .MuiDayCalendar-weekContainer": {
+                  display: "grid",
+                  gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+                  columnGap: "6px",
+                  width: "100%",
+                  m: 0,
+                  p: 0,
+                },
+                "& .MuiPickersDay-root": {
+                  width: "100%",
+                  height: { xs: 44, sm: 56 },
+                  borderRadius: 1,
+                  m: 0,
+                  p: 0,
+                  boxSizing: "border-box",
+                  border: "1px solid",
+                  borderColor: "divider",
+                  fontSize: "1rem",
+                },
+                "& .MuiPickersDay-hiddenDaySpacingFiller": {
+                  width: "100%",
+                  height: { xs: 44, sm: 56 },
+                  borderRadius: 1,
+                  boxSizing: "border-box",
+                  border: "1px solid",
+                  borderColor: "divider",
+                  opacity: 0.35,
+                },
+              }}
+            />
         </LocalizationProvider>
       </Box>
     </Box>
@@ -566,6 +751,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
   const [venue, setVenue] = React.useState("");
   const [eventName, setEventName] = React.useState("");
   const [dates, setDates] = React.useState(selectedDates || []);
+  const [otherVenue, setOtherVenue] = React.useState("");
 
   const [startTime, setStartTime] = React.useState(dayjs().hour(19).minute(0));
   const [endTime, setEndTime] = React.useState(dayjs().hour(22).minute(0));
@@ -613,10 +799,29 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     setDates(next);
   }, [selectedDates]);
 
-  const durationHours = React.useMemo(() => {
-    if (!startTime || !endTime) return 1;
+  const durationLabel = React.useMemo(() => {
+    if (!startTime || !endTime) return "—";
+
     const mins = endTime.diff(startTime, "minute");
-    return Math.max(1, mins / 60);
+    if (mins <= 0) return "—";
+
+    const hours = Math.floor(mins / 60);
+    const minutes = mins % 60;
+
+    if (hours && minutes) return `${hours} hr ${minutes} min`;
+    if (hours) return `${hours} hr`;
+    return `${minutes} min`;
+  }, [startTime, endTime]);
+
+  // ✅ numeric duration (hours) for saving to DB
+  const durationHours = React.useMemo(() => {
+    if (!startTime || !endTime) return 0;
+
+    const mins = endTime.diff(startTime, "minute");
+    if (mins <= 0) return 0;
+
+    // Example: 150 mins -> 2.5 hours
+    return Math.round((mins / 60) * 100) / 100; // 2 decimals
   }, [startTime, endTime]);
 
   const safeAmount = React.useMemo(() => {
@@ -664,7 +869,21 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
       // if eventTypeId exists => normal, else Others
       setEventName(b.eventName ?? "");
 
-      setVenue(b.venue ?? "");
+      // If saved venue matches a known venue, use it.
+      // Otherwise treat it as "Others" and store actual value in otherVenue.
+      const savedVenue = String(b.venue ?? "");
+      const isKnownVenue = VENUES.includes(savedVenue) && savedVenue !== "Others";
+
+      if (isKnownVenue) {
+        setVenue(savedVenue);
+        setOtherVenue("");
+      } else if (savedVenue) {
+        setVenue("Others");
+        setOtherVenue(savedVenue);
+      } else {
+        setVenue("");
+        setOtherVenue("");
+      }
 
       const editDates =
         Array.isArray(b.dates) && b.dates.length
@@ -717,6 +936,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     setRequestedBy("");
     setEventName("");
     setVenue("");
+    setOtherVenue("");
 
     // keep selected dates (at least 1)
     setDates(Array.isArray(selectedDates) && selectedDates.length ? selectedDates : [baseDate]);
@@ -786,9 +1006,19 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     if (!requestedBy.trim()) return notify("Please enter Requested by (Name).", "warning");
     if (!eventName.trim()) return notify("Please enter Event Name.", "warning");
     if (!venue) return notify("Please select a Venue.", "warning");
+    if (venue === "Others" && !otherVenue.trim()) {
+      return notify("Please specify the Venue.", "warning");
+    }
     if (safeAmount <= 0) return notify("Please enter a valid Amount.", "warning");
 
+    const finalVenue = venue === "Others" ? otherVenue.trim() : venue;
     const isEdit = !!initialBooking?.id;
+    if (isEdit) {
+      const st = getBookingStatus(initialBooking);
+      if (st === STATUS.CANCELED || st === STATUS.ARCHIVED) {
+        return notify("This reservation can no longer be edited.", "warning");
+      }
+    }
 
     const dateList = (isEdit ? [dates?.[0]] : (dates || [])).filter(Boolean);
     if (!dateList.length) return notify("Please select at least one date.", "warning");
@@ -806,7 +1036,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     for (const b of (existingBookings || [])) {
       if (ignoreId && b.id === ignoreId) continue;
       if (b.archived) continue;
-      if (b.venue !== venue) continue;
+      if (b.venue !== finalVenue) continue;
 
       const bDates = bookingDates(b);
       const bs = toMinutes(b.startTime);
@@ -817,8 +1047,12 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
         if (!bDates.includes(d)) continue;
 
         if (rangesOverlap(s, e, bs, be)) {
+          const niceDate = dayjs(d).format("MM-DD-YYYY");
+          const niceStart = formatTime12h(b.startTime);
+          const niceEnd = formatTime12h(b.endTime);
+
           return notify(
-            `Schedule conflict: ${venue} already reserved on ${d} (${b.startTime} - ${b.endTime}).`,
+            `Schedule conflict: ${venue} is already reserved on ${niceDate} (${niceStart} - ${niceEnd}).`,
             "error"
           );
         }
@@ -836,12 +1070,13 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
       requestedBy: requestedBy.trim(),
       eventTypeId: null,
       eventName: finalEventName,
-      venue,
+      venue: finalVenue,
       startTime: startTime.format("HH:mm"),
       endTime: endTime.format("HH:mm"),
       durationHours,
       amount: safeAmount,
       resources: normalizedResources,
+      status: STATUS.SUBMITTED,
     };
 
     try {
@@ -998,37 +1233,57 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
             sx={{ mb: 2 }}
           />
 
-{/* Combined Row: Event Name | Venue Dropdown */}
-<Box sx={{ 
-  display: 'grid', 
-  gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, 
-  gap: 2, 
-  mb: 2 
-}}>
-  <TextField
-    fullWidth
-    label="Event Name"
-    value={eventName}
-    onChange={(e) => setEventName(e.target.value.slice(0, LIMITS.otherEventName))}
-    inputProps={{ maxLength: LIMITS.otherEventName }}
-    helperText={
-      <span>
-        Example: <b>Birthday</b>, <b>Wedding</b> • {eventName.length}/{LIMITS.otherEventName}
-      </span>
-    }
-  />
+          {/* Combined Row: Event Name | Venue Dropdown */}
+          <Box sx={{ 
+            display: 'grid', 
+            gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, 
+            gap: 2, 
+            mb: 2 
+          }}>
+            <TextField
+              fullWidth
+              label="Event Name"
+              value={eventName}
+              onChange={(e) => setEventName(e.target.value.slice(0, LIMITS.otherEventName))}
+              inputProps={{ maxLength: LIMITS.otherEventName }}
+              helperText={
+                <span>
+                  Example: <b>Birthday</b>, <b>Wedding</b> • {eventName.length}/{LIMITS.otherEventName}
+                </span>
+              }
+            />
 
-  <FormControl fullWidth>
-    <InputLabel>Venue</InputLabel>
-    <Select label="Venue" value={venue} onChange={(e) => setVenue(e.target.value)}>
-      {VENUES.map((v) => (
-        <MenuItem key={v} value={v}>
-          {v}
-        </MenuItem>
-      ))}
-    </Select>
-  </FormControl>
-</Box>
+            <FormControl fullWidth>
+              <InputLabel>Venue</InputLabel>
+              <Select
+                label="Venue"
+                value={venue}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setVenue(v);
+                  if (v !== "Others") setOtherVenue(""); // reset when not Others
+                }}
+              >
+                {VENUES.map((v) => (
+                  <MenuItem key={v} value={v}>
+                    {v}
+                  </MenuItem>
+                ))}
+              </Select>
+
+              {/* ✅ Show input when Others is selected */}
+              {venue === "Others" ? (
+                <TextField
+                  sx={{ mt: 1 }}
+                  fullWidth
+                  label="Specify Venue"
+                  value={otherVenue}
+                  onChange={(e) => setOtherVenue(e.target.value.slice(0, 60))}
+                  helperText="Type the venue name"
+                />
+              ) : null}
+            </FormControl>
+          </Box>
 
           {/* ✅ Time Section */}
           <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -1047,7 +1302,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
               </Typography>
 
               <Typography sx={{ fontSize: 12, opacity: 0.75 }}>
-                Duration: <b>{durationHours}</b> hr(s)
+                Duration: <b>{durationLabel}</b>
               </Typography>
             </Box>
 
@@ -1261,7 +1516,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
               <Typography variant="body2" component="div">
                 <strong>Event:</strong> {finalEventName}<br />
                 <strong>Requested by:</strong> {requestedBy}<br />
-                <strong>Venue:</strong> {venue}<br />
+                <strong>Venue:</strong> {venue === "Others" ? otherVenue : venue}<br />
                 <strong>Date(s):</strong> {formatSelectedDatesDayjs(dates)}<br />
                 <strong>Time:</strong> {startTime.format("h:mm A")} - {endTime.format("h:mm A")}<br />
                 <strong>Amount:</strong> ₱{safeAmount.toLocaleString()}<br />
@@ -1285,14 +1540,132 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
   );
 }
 
+/** --------- Inline DayBookingsDialog --------- */
+function DayBookingsDialog({ open, dateStr, bookings = [], onClose, onPick, onCreate }) {
+  const list = Array.isArray(bookings) ? [...bookings] : [];
+
+  // sort by start time (HH:mm)
+  list.sort((a, b) => String(a.startTime || "").localeCompare(String(b.startTime || "")));
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography sx={{ fontWeight: 900, lineHeight: 1.1 }}>
+            Reservations on {dateStr ? dayjs(dateStr).format("MMMM D, YYYY") : "—"}
+          </Typography>
+          <Typography sx={{ fontSize: 12, opacity: 0.7 }}>
+            Click a row to view the reservation details.
+          </Typography>
+        </Box>
+
+        <IconButton onClick={onClose} size="small">
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </DialogTitle>
+
+      <DialogContent dividers>
+        {list.length === 0 ? (
+          <Box sx={{ py: 4, textAlign: "center", opacity: 0.8 }}>
+            <Typography sx={{ fontWeight: 900, mb: 0.5 }}>No reservations</Typography>
+            <Typography variant="body2" sx={{ opacity: 0.75 }}>
+              This date has no scheduled reservations.
+            </Typography>
+          </Box>
+        ) : (
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 900 }}>Time</TableCell>
+                  <TableCell sx={{ fontWeight: 900 }}>Event</TableCell>
+                  <TableCell sx={{ fontWeight: 900 }}>Venue</TableCell>
+                  <TableCell sx={{ fontWeight: 900 }}>Status</TableCell>
+                </TableRow>
+              </TableHead>
+
+              <TableBody>
+                {list.map((b) => {
+                  const st = getBookingStatus(b);
+                  const chip = getStatusChipProps(st);
+
+                  return (
+                    <TableRow
+                      key={b.id ?? `${b.date}-${b.startTime}-${b.eventName}`}
+                      hover
+                      sx={{ cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
+                      onClick={() => onPick?.(b)}
+                    >
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={`${formatTime12h(b.startTime)} - ${formatTime12h(b.endTime)}`}
+                        />
+                      </TableCell>
+
+                      <TableCell>
+                        <Typography sx={{ fontWeight: 800 }}>{b.eventName ?? "—"}</Typography>
+                        <Typography variant="body2" sx={{ opacity: 0.7 }}>
+                          Requested by: {b.requestedBy ?? "—"}
+                        </Typography>
+                      </TableCell>
+
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>{b.venue ?? "—"}</TableCell>
+
+                      <TableCell sx={{ whiteSpace: "nowrap" }}>
+                        <Chip
+                          size="small"
+                          label={chip.label}
+                          color={chip.color}
+                          variant={chip.variant}
+                          sx={{ fontWeight: 900 }}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </DialogContent>
+
+      <DialogActions sx={{ justifyContent: "space-between" }}>
+        <Typography sx={{ fontSize: 12, opacity: 0.7, px: 1 }}>
+          Tip: Click a reserved day to view reservations. <b>ALT + click</b> to select it.
+        </Typography>
+
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+          <Button
+            onClick={() => onCreate?.(dateStr)}
+            variant="outlined"
+            size="small"
+            sx={{ fontWeight: 900 }}
+            disabled={!dateStr}
+          >
+            Create Reservation
+          </Button>
+
+          <Button onClick={onClose} variant="contained" size="small" sx={{ fontWeight: 900 }}>
+            Close
+          </Button>
+        </Box>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 /** --------- Inline BookingDetailsDialog --------- */
 function BookingDetailsDialog({
   open,
   booking,
   onClose,
+  onBack,
   onEdit,
   onArchive,
   onDelete,
+  onCancel,
   onPrint,
   onDownload,
 }) {
@@ -1343,11 +1716,19 @@ function BookingDetailsDialog({
               </Box>
               <Box>
                 <Typography sx={{ fontSize: 12, opacity: 0.7 }}>Status</Typography>
-                <Chip
-                  size="small"
-                  label={booking.archived ? "ARCHIVED" : "ACTIVE"}
-                  sx={{ fontWeight: 800 }}
-                />
+                  {(() => {
+                    const st = getBookingStatus(booking);
+                    const props = getStatusChipProps(st);
+                    return (
+                      <Chip
+                        size="small"
+                        label={props.label}
+                        color={props.color}
+                        variant={props.variant}
+                        sx={{ fontWeight: 900 }}
+                      />
+                    );
+                  })()}
               </Box>
             </Box>
           </Paper>
@@ -1503,6 +1884,18 @@ function BookingDetailsDialog({
             "&::-webkit-scrollbar": { height: 6 },
           }}
         >
+          {onBack ? (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<ArrowBackIosNewIcon />}
+              sx={{ whiteSpace: "nowrap" }}
+              onClick={onBack}
+            >
+              Back
+            </Button>
+          ) : null}
+
           <Button
             size="small"
             variant="outlined"
@@ -1523,15 +1916,50 @@ function BookingDetailsDialog({
             Download
           </Button>
 
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<EditIcon />}
-            sx={{ whiteSpace: "nowrap" }}
-            onClick={() => onEdit?.(booking)}
-          >
-            Edit
-          </Button>
+          {(() => {
+            const st = getBookingStatus(booking);
+            const editDisabled =
+              st === STATUS.CANCELED ||
+              st === STATUS.ARCHIVED ||
+              isBookingPast(booking);
+
+            if (editDisabled) return null;
+
+            return (
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<EditIcon />}
+                sx={{ whiteSpace: "nowrap" }}
+                onClick={() => onEdit?.(booking)}
+              >
+                Edit
+              </Button>
+            );
+          })()}
+
+          {/* ✅ ADD THIS BLOCK RIGHT AFTER EDIT */}
+          {(() => {
+            const st = getBookingStatus(booking);
+            const hideCancel =
+              st === STATUS.CANCELED ||
+              st === STATUS.ARCHIVED ||
+              isBookingPast(booking);
+
+            if (hideCancel) return null;
+
+            return (
+              <Button
+                size="small"
+                variant="outlined"
+                color="error"
+                sx={{ whiteSpace: "nowrap" }}
+                onClick={() => onCancel?.(booking)}
+              >
+                Cancel
+              </Button>
+            );
+          })()}
 
           <Button
             size="small"
@@ -1592,6 +2020,8 @@ function BookingHistory({
   sortOrder,
   setSortOrder,
   venues,
+  historyDate,
+  setHistoryDate,
 }) {
   // ✅ pagination state (local to table)
   const [page, setPage] = React.useState(0);
@@ -1600,7 +2030,7 @@ function BookingHistory({
   // Reset to page 0 when filters/search change or data changes
   React.useEffect(() => {
     setPage(0);
-  }, [search, venueFilter, statusFilter, sortOrder, rows?.length]);
+  }, [search, venueFilter, statusFilter, sortOrder, historyDate, rows?.length]);
 
   const total = Array.isArray(rows) ? rows.length : 0;
 
@@ -1635,89 +2065,121 @@ function BookingHistory({
       }}
     >
       {/* Header */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1.25,
-          flexWrap: "wrap",
-          mb: 1.25,
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Typography variant="h6" sx={{ fontWeight: 900 }}>
-            Reservation History
-          </Typography>
-          {loading ? <CircularProgress size={18} /> : null}
-          <Chip
-            size="small"
-            label={`${total} record${total === 1 ? "" : "s"}`}
-            variant="outlined"
-            sx={{ fontWeight: 800 }}
-          />
-        </Box>
-
-        {/* Filters */}
-        <Stack
-          direction="row"
-          spacing={1}
+      <Box sx={{ display: "grid", gap: 1.25, mb: 1.25 }}>
+        {/* ✅ ONE responsive grid for title + all controls */}
+        <Box
           sx={{
-            ml: "auto",
-            flexWrap: "wrap",
+            display: "grid",
+            gap: 1,
             alignItems: "center",
-            justifyContent: "flex-end",
+
+            // 12-col responsive layout (no clipping)
+            gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
+
+            // critical: allow children to shrink instead of pushing others off screen
+            "& > *": { minWidth: 0 },
           }}
         >
-          <TextField
-            size="small"
-            label="Search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            sx={{ minWidth: 220 }}
-          />
+          {/* LEFT: Title + loading + chip */}
+          <Box
+            sx={{
+              gridColumn: { xs: "1 / -1", md: "1 / span 5" },
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flexWrap: "wrap",
+            }}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 900 }}>
+              Reservation History
+            </Typography>
+            {loading ? <CircularProgress size={18} /> : null}
+            <Chip
+              size="small"
+              label={`${total} record${total === 1 ? "" : "s"}`}
+              variant="outlined"
+              sx={{ fontWeight: 800 }}
+            />
+          </Box>
 
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Venue</InputLabel>
-            <Select
-              label="Venue"
-              value={venueFilter}
-              onChange={(e) => setVenueFilter(e.target.value)}
-            >
-              <MenuItem value="ALL">All Venues</MenuItem>
-              {venues.map((v) => (
-                <MenuItem key={v} value={v}>
-                  {v}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {/* RIGHT: Search (aligned with title row on desktop) */}
+          <Box sx={{ gridColumn: { xs: "1 / -1", md: "6 / span 4" } }}>
+            <TextField
+              size="small"
+              label="Search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              fullWidth
+            />
+          </Box>
 
-          <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel>Status</InputLabel>
-            <Select
-              label="Status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <MenuItem value="ACTIVE">Active</MenuItem>
-              <MenuItem value="ARCHIVED">Archived</MenuItem>
-              <MenuItem value="ALL">All</MenuItem>
-            </Select>
-          </FormControl>
+          {/* RIGHT: Date (beside Search on desktop, drops below on shrink) */}
+          <Box sx={{ gridColumn: { xs: "1 / -1", sm: "1 / -1", md: "10 / span 3" } }}>
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <DatePicker
+                label="Date"
+                value={historyDate}
+                onChange={(v) => setHistoryDate(v)}
+                slotProps={{
+                  textField: { size: "small", fullWidth: true, sx: { minWidth: 0 } },
+                }}
+              />
+            </LocalizationProvider>
+          </Box>
 
-          <FormControl size="small" sx={{ minWidth: 160 }}>
-            <InputLabel>Sort</InputLabel>
-            <Select
-              label="Sort"
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value)}
-            >
-              <MenuItem value="NEWEST">Newest</MenuItem>
-              <MenuItem value="OLDEST">Oldest</MenuItem>
-            </Select>
-          </FormControl>
-        </Stack>
+          {/* ✅ Filters row that "flows" under Search/Date when shrinking */}
+          {/* Venue */}
+          <Box sx={{ gridColumn: { xs: "1 / -1", sm: "1 / span 4", md: "1 / span 4" } }}>
+            <FormControl size="small" fullWidth>
+              <InputLabel>Venue</InputLabel>
+              <Select
+                label="Venue"
+                value={venueFilter}
+                onChange={(e) => setVenueFilter(e.target.value)}
+              >
+                <MenuItem value="ALL">All Venues</MenuItem>
+                {venues.map((v) => (
+                  <MenuItem key={v} value={v}>
+                    {v}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+
+          {/* Status */}
+          <Box sx={{ gridColumn: { xs: "1 / -1", sm: "5 / span 4", md: "5 / span 4" } }}>
+            <FormControl size="small" fullWidth>
+              <InputLabel>Status</InputLabel>
+              <Select
+                label="Status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <MenuItem value="ALL">All</MenuItem>
+                <MenuItem value={STATUS.ACTIVE}>Active</MenuItem>
+                <MenuItem value={STATUS.SUBMITTED}>Submitted</MenuItem>
+                <MenuItem value={STATUS.CANCELED}>Canceled</MenuItem>
+                <MenuItem value={STATUS.ARCHIVED}>Archived</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+
+          {/* Sort */}
+          <Box sx={{ gridColumn: { xs: "1 / -1", sm: "9 / span 4", md: "9 / span 4" } }}>
+            <FormControl size="small" fullWidth>
+              <InputLabel>Sort</InputLabel>
+              <Select
+                label="Sort"
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value)}
+              >
+                <MenuItem value="NEWEST">Newest</MenuItem>
+                <MenuItem value="OLDEST">Oldest</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+        </Box>
       </Box>
 
       {/* Table */}
@@ -1726,7 +2188,6 @@ function BookingHistory({
           border: "1px solid",
           borderColor: "divider",
           borderRadius: 1,
-          maxHeight: 520, // ✅ scroll area
         }}
       >
         <Table stickyHeader size="small" aria-label="reservation history">
@@ -1806,9 +2267,12 @@ function BookingHistory({
                       <Typography sx={{ fontWeight: 800 }}>
                         {b.eventName}
                       </Typography>
-                      {b.archived ? (
-                        <Chip size="small" label="Archived" color="warning" />
-                      ) : null}
+                        {(() => {
+                          const st = getBookingStatus(b);
+                          if (st === STATUS.ACTIVE) return null; // keep clean if you want
+                          const props = getStatusChipProps(st);
+                          return <Chip size="small" label={props.label} color={props.color} variant={props.variant} />;
+                        })()}
                     </Box>
                     <Typography variant="body2" sx={{ opacity: 0.7 }}>
                       {b.venue}
@@ -1846,17 +2310,29 @@ function BookingHistory({
                       </IconButton>
                     </Tooltip>
 
-                    <Tooltip title="Edit">
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEdit?.(b);
-                        }}
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                    {(() => {
+                      const st = getBookingStatus(b);
+                      const editDisabled =
+                        st === STATUS.CANCELED ||
+                        st === STATUS.ARCHIVED ||
+                        isBookingPast(b);
+
+                      if (editDisabled) return null;
+
+                      return (
+                        <Tooltip title="Edit">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEdit?.(b);
+                            }}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      );
+                    })()}
 
                     <Tooltip title={b.archived ? "Unarchive" : "Archive"}>
                       <IconButton
@@ -1934,7 +2410,6 @@ export default function SchedulePage() {
 
     for (const b of (bookings || [])) {
       if (!b) continue;
-      if (b.archived) continue; // ✅ highlight ACTIVE reservations only (remove if you want to include archived)
 
       const dates = bookingDates(b);
       for (const d of dates) {
@@ -1950,8 +2425,10 @@ export default function SchedulePage() {
   // ✅ filters/search
   const [search, setSearch] = React.useState("");
   const [venueFilter, setVenueFilter] = React.useState("ALL");
-  const [statusFilter, setStatusFilter] = React.useState("ACTIVE"); // ACTIVE | ARCHIVED | ALL
+  const [statusFilter, setStatusFilter] = React.useState("ALL");
   const [sortOrder, setSortOrder] = React.useState("NEWEST"); // NEWEST | OLDEST
+
+  const [historyDate, setHistoryDate] = React.useState(null);
 
   const [printOpen, setPrintOpen] = React.useState(false);
   const [printBooking, setPrintBooking] = React.useState(null);
@@ -1967,17 +2444,31 @@ export default function SchedulePage() {
   const [archiveDialogOpen, setArchiveDialogOpen] = React.useState(false);
   const [archiveDialogBooking, setArchiveDialogBooking] = React.useState(null);
 
+  // Cancel confirmation dialog states
+  const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
+  const [cancelDialogBooking, setCancelDialogBooking] = React.useState(null);
+
   const filteredBookings = React.useMemo(() => {
     const q = search.trim().toLowerCase();
 
     let list = Array.isArray(bookings) ? [...bookings] : [];
 
     // status filter
-    if (statusFilter === "ACTIVE") list = list.filter((b) => !b.archived);
-    if (statusFilter === "ARCHIVED") list = list.filter((b) => !!b.archived);
+    if (statusFilter !== "ALL") {
+      list = list.filter((b) => getBookingStatus(b) === statusFilter);
+    }
 
     // venue filter
     if (venueFilter !== "ALL") list = list.filter((b) => b.venue === venueFilter);
+
+    // ✅ date filter (matches BOTH b.date and b.dates[])
+  if (historyDate) {
+    const target = dayjs(historyDate).format("YYYY-MM-DD");
+    list = list.filter((b) => {
+      const ds = bookingDates(b); // uses your helper
+      return ds.includes(target);
+    });
+  }
 
     // search filter
     if (q) {
@@ -2006,7 +2497,7 @@ export default function SchedulePage() {
     });
 
     return list;
-  }, [bookings, search, venueFilter, statusFilter, sortOrder]);
+  }, [bookings, search, venueFilter, statusFilter, sortOrder, historyDate, bookingDates]);
 
   // ✅ fetch bookings (optionally filtered by selected date)
   const loadBookings = React.useCallback(async () => {
@@ -2033,6 +2524,12 @@ export default function SchedulePage() {
   const [editingBooking, setEditingBooking] = React.useState(null);
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [detailsBooking, setDetailsBooking] = React.useState(null);
+  const [detailsFromDay, setDetailsFromDay] = React.useState(false);
+
+  // ✅ Day summary dialog state
+  const [dayDialogOpen, setDayDialogOpen] = React.useState(false);
+  const [dayDialogDate, setDayDialogDate] = React.useState(null);
+  const [dayDialogBookings, setDayDialogBookings] = React.useState([]);
 
   // ✅ keep the open Details dialog in sync with latest bookings state
   React.useEffect(() => {
@@ -2043,14 +2540,12 @@ export default function SchedulePage() {
   }, [bookings, detailsBooking?.id]); // only reacts to bookings updates + current id
 
   const handleReservedDayClick = React.useCallback((list, dateStr) => {
-  const bookingsForDay = Array.isArray(list) ? list : [];
-
+    const bookingsForDay = Array.isArray(list) ? list : [];
     if (!bookingsForDay.length) return;
 
-    // If multiple reservations exist on the same date, open the first one.
-    // (Optional: you can later add a chooser dialog.)
-    setDetailsBooking(bookingsForDay[0]);
-    setDetailsOpen(true);
+    setDayDialogDate(dateStr);
+    setDayDialogBookings(bookingsForDay);
+    setDayDialogOpen(true);
   }, []);
 
   React.useEffect(() => {
@@ -2080,6 +2575,14 @@ export default function SchedulePage() {
   };
 
   const handleEditBooking = (b) => {
+    if (!b) return;
+
+    const st = getBookingStatus(b);
+    if (st === STATUS.CANCELED || st === STATUS.ARCHIVED) return;
+
+    // optional: also block edit for past bookings
+    if (isBookingPast(b)) return;
+
     setEditingBooking(b);
     setSelectedDates([dayjs(b.date)]);
     setOpen(true);
@@ -2166,9 +2669,47 @@ export default function SchedulePage() {
     setArchiveDialogBooking(null);
   };
 
+  const handleCancelBooking = (b) => {
+    if (!b?.id) return;
+
+    // prevent cancel if already past on UI level
+    if (isBookingPast(b)) return;
+
+    if (getBookingStatus(b) === STATUS.CANCELED) return;
+
+    setCancelDialogBooking(b);
+    setCancelDialogOpen(true);
+  };
+
+  const handleCancelCancelDialog = () => {
+    setCancelDialogOpen(false);
+    setCancelDialogBooking(null);
+  };
+
+  const handleConfirmCancelBooking = async () => {
+    if (!cancelDialogBooking?.id) return;
+
+    try {
+      // IMPORTANT: backend route must exist; adjust if yours differs
+      const res = await axios.patch(`${API}/bookings/${cancelDialogBooking.id}/cancel`);
+      const updated = res.data;
+
+      setBookings((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+
+      // keep details dialog in sync
+      if (detailsBooking?.id === updated.id) setDetailsBooking(updated);
+
+      setCancelDialogOpen(false);
+      setCancelDialogBooking(null);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to cancel reservation.");
+    }
+  };
+
   return (
     <>
-      <Topbar title="Reservation Scheduling" />
+      <Topbar title="Event Scheduling" />
 
       <Container
         maxWidth={false}
@@ -2178,74 +2719,101 @@ export default function SchedulePage() {
           py: { xs: 2, sm: 3 },
         }}
       >
-        <Box sx={{ minHeight: "calc(100vh - 88px)", width: "100%" }}>
+        <Box
+          sx={{
+            minHeight: "calc(100vh - 88px)",
+            width: "100%",
+            display: "grid",
+            gap: 2,
 
-          <CalendarSection
-            selectedDates={selectedDates}
-            onToggleDate={(d) => {
-              if (!d) return;
-              setSelectedDates((prev) => {
-                const list = Array.isArray(prev) ? prev : [];
-                const exists = list.some((x) => x && x.isSame(d, "day"));
-                if (exists) return list.filter((x) => !x.isSame(d, "day"));
-                return [...list, d].sort((a, b) => a.valueOf() - b.valueOf());
-              });
+            // ✅ laptop-first: 2 columns on md+, stack on xs/sm
+            gridTemplateColumns: { xs: "1fr", md: "420px 1fr" },
+
+            alignItems: "start",
+          }}
+        >
+          {/* LEFT: Calendar (sticky on laptop) */}
+          <Box
+            sx={{
+              position: { xs: "static", md: "sticky" },
+              top: { md: 88 + 16 }, // Topbar height + spacing
+              alignSelf: "start",
             }}
-            onViewChange={(v) => setCalendarView(v)}
-            calendarMonth={calendarMonth}
-            onMonthChange={(newMonth) => setCalendarMonth(newMonth)}
-            reservedByDate={reservedByDate}
-            onReservedDayClick={handleReservedDayClick}
-            headerActions={
-              <>
-                <Button
-                  variant="outlined"
-                  onClick={() => {
-                    setSelectedDates([]);
-                    setCalendarMonth(dayjs());
-                  }}
-                  sx={{ fontWeight: 800 }}
-                >
-                  Clear
-                </Button>
-                <Button
-                  variant="contained"
-                  disabled={!selectedDates.length}
-                  onClick={() => {
-                    setEditingBooking(null);
-                    setOpen(true);
-                  }}
-                  sx={{ fontWeight: 800 }}
-                >
-                  Create Reservation ({selectedDates.length})
-                </Button>
-              </>
-            }
-          />
+          >
 
-          {/* ✅ History BELOW the calendar */}
-            <BookingHistory
-              loading={historyLoading}
-              rows={filteredBookings}
-              onEdit={handleEditBooking}
-              onDelete={handleDeleteBooking}
-              onArchive={handleArchiveBooking}
-              onPrint={openPrint}
-              onDownload={openDownload}
-              onRowClick={(b) => {
-                setDetailsBooking(b);
-                setDetailsOpen(true);
+            <CalendarSection
+              calendarView={calendarView}
+              selectedDates={selectedDates}
+              onToggleDate={(d) => {
+                if (!d) return;
+                setSelectedDates((prev) => {
+                  const list = Array.isArray(prev) ? prev : [];
+                  const exists = list.some((x) => x && x.isSame(d, "day"));
+                  if (exists) return list.filter((x) => !x.isSame(d, "day"));
+                  return [...list, d].sort((a, b) => a.valueOf() - b.valueOf());
+                });
               }}
-              search={search}
-              setSearch={setSearch}
-              venueFilter={venueFilter}
-              setVenueFilter={setVenueFilter}
-              statusFilter={statusFilter}
-              setStatusFilter={setStatusFilter}
-              sortOrder={sortOrder}
-              setSortOrder={setSortOrder}
-              venues={VENUES}
+              onViewChange={(v) => setCalendarView(v)}
+              calendarMonth={calendarMonth}
+              onMonthChange={(newMonth) => setCalendarMonth(newMonth)}
+              reservedByDate={reservedByDate}
+              onReservedDayClick={handleReservedDayClick}
+              headerActions={
+                <>
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      setSelectedDates([]);
+                      setCalendarMonth(dayjs());
+                    }}
+                    sx={{ fontWeight: 800 }}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    variant="contained"
+                    disabled={!selectedDates.length}
+                    onClick={() => {
+                      setEditingBooking(null);
+                      setOpen(true);
+                    }}
+                    sx={{ fontWeight: 800 }}
+                  >
+                    Create Reservation ({selectedDates.length})
+                  </Button>
+                </>
+              }
             />
+          </Box>
+
+          <Box sx={{ minWidth: 0 }}>
+            {/* ✅ History BELOW the calendar */}
+              <BookingHistory
+                loading={historyLoading}
+                rows={filteredBookings}
+                onEdit={handleEditBooking}
+                onDelete={handleDeleteBooking}
+                onArchive={handleArchiveBooking}
+                onPrint={openPrint}
+                onDownload={openDownload}
+                onRowClick={(b) => {
+                  setDetailsFromDay(false);
+                  setDetailsBooking(b);
+                  setDetailsOpen(true);
+                }}
+                search={search}
+                setSearch={setSearch}
+                venueFilter={venueFilter}
+                setVenueFilter={setVenueFilter}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                sortOrder={sortOrder}
+                setSortOrder={setSortOrder}
+                venues={VENUES}
+                historyDate={historyDate}
+                setHistoryDate={setHistoryDate}
+              />
+          </Box>
         </Box>
       </Container>
 
@@ -2279,6 +2847,35 @@ export default function SchedulePage() {
         }}
       />
 
+      <DayBookingsDialog
+        open={dayDialogOpen}
+        dateStr={dayDialogDate}
+        bookings={dayDialogBookings}
+        onClose={() => {
+          setDayDialogOpen(false);
+          setDayDialogDate(null);
+          setDayDialogBookings([]);
+        }}
+        onPick={(b) => {
+          setDayDialogOpen(false);     // close dialog only
+          setDetailsFromDay(true);     // ✅ came from day summary
+          setDetailsBooking(b);
+          setDetailsOpen(true);
+        }}
+        onCreate={(dateStr) => {
+          if (!dateStr) return;
+
+          // close summary dialog
+          setDayDialogOpen(false);
+
+          // open create drawer for that day
+          setEditingBooking(null);
+          setSelectedDates([dayjs(dateStr)]);
+          setCalendarMonth(dayjs(dateStr));
+          setOpen(true);
+        }}
+      />
+
       {/* ✅ Booking Details Dialog (PASTE HERE) */}
       <BookingDetailsDialog
         open={detailsOpen}
@@ -2295,9 +2892,54 @@ export default function SchedulePage() {
         }}
         onArchive={(b) => handleArchiveBooking(b)}
         onDelete={(b) => handleDeleteBooking(b)}
+        onCancel={(b) => handleCancelBooking(b)}
         onPrint={(b) => openPrint(b)}
         onDownload={(b) => openDownload(b)}
       />
+
+      {/* ✅ Cancel Dialog */}
+      <Dialog
+        open={cancelDialogOpen}
+        onClose={handleCancelCancelDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900 }}>
+          Cancel Reservation
+        </DialogTitle>
+        <DialogContent>
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Are you sure you want to cancel this reservation?
+            </Typography>
+
+            {cancelDialogBooking && (
+              <Box sx={{ p: 1.5, bgcolor: "action.hover", borderRadius: 1, mb: 2 }}>
+                <Typography variant="body2" component="div">
+                  <strong>Event:</strong> {cancelDialogBooking.eventName}<br />
+                  <strong>Requested by:</strong> {cancelDialogBooking.requestedBy}<br />
+                  <strong>Date:</strong> {formatDateRange(cancelDialogBooking)}
+                </Typography>
+              </Box>
+            )}
+
+            <Typography sx={{ color: "error.main", fontWeight: 700 }}>
+              This will mark the reservation as CANCELED.
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelCancelDialog}>Back</Button>
+          <Button
+            onClick={handleConfirmCancelBooking}
+            color="error"
+            variant="contained"
+            sx={{ fontWeight: 800 }}
+          >
+            Confirm Cancel
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ✅ Print Dialog */}
       <PrintDialog

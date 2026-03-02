@@ -14,14 +14,14 @@ export default function Topbar({ title = "Scheduling" }) {
           {title}
         </Typography>
         <Box sx={{ flex: 1 }} />
-        <IconButton
+        {/* <IconButton
           color="inherit"
           onClick={() =>
             nav("/backoffice/login", { state: { from: location.pathname } })
           }
         >
           <AccountCircleIcon />
-        </IconButton>
+        </IconButton> */}
       </Toolbar>
     </AppBar>
   );

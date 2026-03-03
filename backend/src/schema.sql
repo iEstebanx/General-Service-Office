@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   total_amount INTEGER NOT NULL,
   resources TEXT,                       -- JSON string
 
-  status TEXT NOT NULL DEFAULT 'SUBMITTED', -- ACTIVE | SUBMITTED | CANCELED | ARCHIVED
+  status TEXT NOT NULL DEFAULT 'SUBMITTED', -- SUBMITTED | CANCELED | ARCHIVED
   archived INTEGER NOT NULL DEFAULT 0,   -- 0/1 (kept for backward compatibility)
 
   created_at TEXT NOT NULL DEFAULT (datetime('now')),

@@ -50,28 +50,33 @@ function formatDateDisplay(booking) {
   const formatted = groups.map((arr) => {
     if (arr.length === 1) return arr[0].format("MMMM D, YYYY").toUpperCase();
 
-    // consecutive check by day-diff (robust)
-    let consecutive = true;
+    const first = arr[0];
+    const year = first.format("YYYY");
+    const month = first.format("MMMM");
+
+    // Build consecutive ranges (ex: 11, 13-18)
+    const ranges = [];
+    let start = arr[0];
+    let prev = arr[0];
+
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i].diff(arr[i - 1], "day") !== 1) {
-        consecutive = false;
-        break;
+      const cur = arr[i];
+      if (cur.diff(prev, "day") === 1) {
+        prev = cur;
+      } else {
+        ranges.push([start, prev]);
+        start = cur;
+        prev = cur;
       }
     }
+    ranges.push([start, prev]);
 
-    const first = arr[0];
-    const last = arr[arr.length - 1];
+    // Convert ranges to day parts: ["11", "13-18"]
+    const parts = ranges.map(([a, b]) =>
+      a.isSame(b, "day") ? a.format("D") : `${a.format("D")}-${b.format("D")}`
+    );
 
-    if (consecutive) {
-      return `${first.format("MMMM")} ${first.format("D")}-${last.format("D")}, ${first.format(
-        "YYYY"
-      )}`.toUpperCase();
-    }
-
-    const list = arr
-      .map((d, idx) => (idx === 0 ? d.format("MMMM D") : d.format("D")))
-      .join(", ");
-    return `${list}, ${first.format("YYYY")}`.toUpperCase();
+    return `${month} ${parts.join(", ")}, ${year}`.toUpperCase();
   });
 
   return formatted.join(" and ");
@@ -156,7 +161,7 @@ function GovHeader() {
 
 function ApprovalBlock() {
   return (
-    <Box sx={{ mt: 1.5, display: "flex", justifyContent: "flex-end" }}>
+        <Box className="approval">
       <Box sx={{ display: "grid", gridTemplateColumns: "auto auto", columnGap: 2 }}>
         <Typography sx={{ fontWeight: 900, fontSize: 14 }}>Approved by:</Typography>
         <Box>
@@ -194,7 +199,7 @@ function TwoColResources({ r }) {
 }
 
 // ✅ Force the print layout to fill ONE Letter page
-const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ booking }, ref) {
+const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ booking, docType }, ref) {
   if (!booking) return null;
 
   const r = booking.resources || {};
@@ -202,6 +207,10 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
 
   const amountNum = Number(booking?.finalAmount ?? booking?.amount ?? 0);
   const amountText = amountNum > 0 ? `₱${amountNum.toLocaleString()}` : "—";
+
+  const showPermit = docType === "permit" || docType === "both";
+  const showSOA = docType === "soa" || docType === "both";
+  const showDivider = showPermit && showSOA;
 
   return (
     <Box ref={ref} className="print-root">
@@ -240,9 +249,16 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
           flex: 1;
           display: flex;
           flex-direction: column;
-          justify-content: space-between; /* makes it "use the page" */
+          justify-content: flex-start;
           break-inside: avoid;
           page-break-inside: avoid;
+        }
+
+        /* optional: add some breathing room below the content */
+        .approval {
+          margin-top: 0.35in;
+          display: flex;
+          justify-content: flex-end;
         }
 
         .title {
@@ -267,52 +283,56 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
 
       <Box className="print-page">
         {/* ===================== PERMIT ===================== */}
-        <Box className="section">
-          <Box className="no-break">
-            <GovHeader />
+        {showPermit && (
+          <Box className="section">
+            <Box className="no-break">
+              <GovHeader />
 
-            <Typography className="title">{venueTitle}</Typography>
+              <Typography className="title">{venueTitle}</Typography>
 
-            <Box sx={{ mt: 0.3 }}>
-              <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
-              <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
-              <InfoRow label="Date" value={formatDateDisplay(booking)} />
-              <InfoRow label="Time" value={formatTimeDisplay(booking)} />
+              <Box sx={{ mt: 0.3 }}>
+                <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
+                <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
+                <InfoRow label="Date" value={formatDateDisplay(booking)} />
+                <InfoRow label="Time" value={formatTimeDisplay(booking)} />
 
-              <TwoColResources r={r} />
+                <TwoColResources r={r} />
+              </Box>
+            </Box>
+
+            <Box className="no-break">
+              <ApprovalBlock />
             </Box>
           </Box>
-
-          <Box className="no-break">
-            <ApprovalBlock />
-          </Box>
-        </Box>
+        )}
 
         {/* Divider */}
-        <Box className="divider" />
+        {showDivider && <Box className="divider" />}
 
         {/* ===================== SOA ===================== */}
-        <Box className="section">
-          <Box className="no-break">
-            <GovHeader />
+        {showSOA && (
+          <Box className="section">
+            <Box className="no-break">
+              <GovHeader />
 
-            <Typography className="title">STATEMENT OF ACCOUNT</Typography>
+              <Typography className="title">STATEMENT OF ACCOUNT</Typography>
 
-            <Box sx={{ mt: 0.3 }}>
-              <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
-              <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
-              <InfoRow label="Date" value={formatDateDisplay(booking)} />
-              <InfoRow label="Time" value={formatTimeDisplay(booking)} />
-              <InfoRow label="Amount" value={amountText} />
+              <Box sx={{ mt: 0.3 }}>
+                <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
+                <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
+                <InfoRow label="Date" value={formatDateDisplay(booking)} />
+                <InfoRow label="Time" value={formatTimeDisplay(booking)} />
+                <InfoRow label="Amount" value={amountText} />
 
-              <TwoColResources r={r} />
+                <TwoColResources r={r} />
+              </Box>
+            </Box>
+
+            <Box className="no-break">
+              <ApprovalBlock />
             </Box>
           </Box>
-
-          <Box className="no-break">
-            <ApprovalBlock />
-          </Box>
-        </Box>
+        )}
       </Box>
     </Box>
   );
@@ -339,12 +359,9 @@ export default function PrintDialog({
   `;
 
   const handlePrint = useReactToPrint({
-    contentRef: printRef,
+    content: () => printRef.current,
     documentTitle: booking?.venue ? `${booking.venue}-permit-soa` : "permit-soa",
     pageStyle,
-    onBeforePrint: async () => {
-      await new Promise((r) => setTimeout(r, 250));
-    },
   });
 
   const handleDownload = React.useCallback(async () => {
@@ -411,13 +428,17 @@ export default function PrintDialog({
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ fontWeight: 900 }}>
-        Print Permit + Statement of Account
+        {docType === "permit"
+          ? "Venue Permit"
+          : docType === "soa"
+          ? "Statement of Account"
+          : "Permit + Statement of Account"}
       </DialogTitle>
 
       <DialogContent dividers sx={{ p: 1 }}>
         {/* preview container */}
         <Box ref={printRef} sx={{ display: "flex", justifyContent: "center" }}>
-          <CombinedPermitAndSOA booking={booking} />
+          <CombinedPermitAndSOA booking={booking} docType={docType} />
         </Box>
       </DialogContent>
 

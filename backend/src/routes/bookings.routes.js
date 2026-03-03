@@ -2,8 +2,8 @@
 const router = require("express").Router();
 
 const STATUS = {
-  ACTIVE: "ACTIVE",
   SUBMITTED: "SUBMITTED",
+  APPROVED: "APPROVED",
   CANCELED: "CANCELED",
   ARCHIVED: "ARCHIVED",
 };
@@ -11,6 +11,10 @@ const STATUS = {
 function normalizeStatus(raw) {
   const s = String(raw ?? "").trim().toUpperCase();
   if (!s) return null;
+
+  // ✅ legacy: normalize ACTIVE -> SUBMITTED
+  if (s === "ACTIVE") return STATUS.SUBMITTED;
+
   if (!Object.values(STATUS).includes(s)) return null;
   return s;
 }
@@ -86,7 +90,7 @@ function findConflict(db, { venue, dateList, startTime, endTime, ignoreId = null
     FROM bookings b
     JOIN booking_dates bd ON bd.booking_id = b.booking_id
     WHERE b.archived = 0
-      AND UPPER(COALESCE(b.status, 'ACTIVE')) NOT IN ('CANCELED', 'ARCHIVED')
+      AND UPPER(COALESCE(b.status, 'SUBMITTED')) NOT IN ('CANCELED', 'ARCHIVED')
       AND b.venue = ?
       AND bd.booking_date IN (${placeholders})
   `;
@@ -160,7 +164,7 @@ function hydrateBooking(db, b) {
 
     resources: parsedResources,
 
-    status: (b.status ? String(b.status).toUpperCase() : null),
+    status: normalizeStatus(b.status) || STATUS.SUBMITTED,
     archived: !!b.archived,
     createdAt: b.created_at ? new Date(b.created_at).toISOString() : null,
     updatedAt: b.updated_at ? new Date(b.updated_at).toISOString() : null,
@@ -434,6 +438,36 @@ router.patch("/:id/archive", (req, res) => {
   } catch (e) {
     console.error("PATCH /api/bookings/:id/archive error:", e);
     return res.status(500).json({ message: "Failed to archive reservation.", error: e.message });
+  }
+});
+
+// APPROVE booking (mark as APPROVED)
+router.patch("/:id/approve", (req, res) => {
+  const id = req.params.id;
+
+  try {
+    const db = getDb(req);
+
+    const current = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    if (!current) return res.status(404).json({ message: "Booking not found" });
+
+    const curStatus = normalizeStatus(current.status) || STATUS.SUBMITTED;
+
+    if (curStatus === STATUS.CANCELED) {
+      return res.status(400).json({ message: "Cannot approve a canceled booking." });
+    }
+    if (curStatus === STATUS.ARCHIVED || current.archived) {
+      return res.status(400).json({ message: "Cannot approve an archived booking." });
+    }
+
+    db.prepare(`UPDATE bookings SET status = ? WHERE booking_id = ?`).run(STATUS.APPROVED, id);
+
+    const fresh = db.prepare(`SELECT * FROM bookings WHERE booking_id = ? LIMIT 1`).get(id);
+    const updated = hydrateBooking(db, fresh);
+    return res.json(updated);
+  } catch (e) {
+    console.error("PATCH /api/bookings/:id/approve error:", e);
+    return res.status(500).json({ message: "Failed to approve reservation.", error: e.message });
   }
 });
 

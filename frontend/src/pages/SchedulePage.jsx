@@ -6,18 +6,15 @@ import {
   Container,
   Box,
   Typography,
-  Drawer,
   TextField,
   Button,
   Divider,
-  Grid,
   FormControlLabel,
   Switch,
   InputAdornment,
   FormControl,
   InputLabel,
   Select,
-  MenuItem,
   Paper,
   Dialog,
   DialogTitle,
@@ -37,10 +34,17 @@ import {
   IconButton,
   Tooltip,
   Stack,
+  ButtonGroup,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
 } from "@mui/material";
 
 import Topbar from "@/components/Topbar.jsx";
 import PrintDialog from "@/components/Print.jsx";
+
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
@@ -68,23 +72,21 @@ import { useTheme } from "@mui/material/styles";
 // ✅ Use proxy: /api -> backend
 const API = "/api";
 
-/** --------- Status helpers --------- */
 const STATUS = {
   SUBMITTED: "SUBMITTED",
+  APPROVED: "APPROVED",
   CANCELED: "CANCELED",
   ARCHIVED: "ARCHIVED",
 };
 
-// Priority for calendar coloring if multiple bookings exist on the same date
-const STATUS_PRIORITY = {
-  CANCELED: 4,
-  SUBMITTED: 3,
-  ACTIVE: 2,
-  ARCHIVED: 1,
-};
-
 function getBookingStatus(b) {
-  if (b?.status) return String(b.status).toUpperCase();
+  const raw = b?.status ? String(b.status).toUpperCase() : "";
+
+  // ✅ legacy compatibility: treat ACTIVE as SUBMITTED
+  if (raw === "ACTIVE") return STATUS.SUBMITTED;
+
+  if (raw) return raw;
+
   if (b?.archived) return STATUS.ARCHIVED;
   if (b?.canceled) return STATUS.CANCELED;
   return STATUS.SUBMITTED; // fallback
@@ -108,6 +110,8 @@ function getStatusChipProps(status) {
   switch (status) {
     case STATUS.SUBMITTED:
       return { label: "SUBMITTED", color: "info", variant: "filled" };
+    case STATUS.APPROVED:
+      return { label: "APPROVED", color: "success", variant: "filled" };
     case STATUS.CANCELED:
       return { label: "CANCELED", color: "error", variant: "filled" };
     case STATUS.ARCHIVED:
@@ -144,60 +148,63 @@ const LIMITS = {
 
 // Helper function to format dates nicely without repeating month/year
 function formatDateRange(booking) {
-  console.log('Booking data:', { id: booking.id, date: booking.date, dates: booking.dates });
+  const dates = Array.isArray(booking?.dates) && booking.dates.length
+    ? booking.dates
+    : (booking?.date ? [booking.date] : []);
 
-  const dates = Array.isArray(booking.dates) && booking.dates.length 
-    ? booking.dates 
-    : (booking.date ? [booking.date] : []);
-  
-  if (dates.length === 0) return "—";
-  if (dates.length === 1) return dayjs(dates[0]).format("MMMM D, YYYY"); // Month-Day-Year
-  
-  // Parse all dates
-  const parsedDates = dates.map(d => dayjs(d));
-  
-  // Group by month-year
-  const grouped = {};
-  parsedDates.forEach(date => {
-    const key = date.format('MMMM YYYY');
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(date);
-  });
-  
-  // Format each group
-  const formattedGroups = Object.entries(grouped).map(([monthYear, datesInGroup]) => {
-    if (datesInGroup.length === 1) {
-      return datesInGroup[0].format('MMMM D, YYYY');
-    }
-    
-    // Sort dates within group
-    datesInGroup.sort((a, b) => a.date() - b.date());
-    
-    const firstDay = datesInGroup[0].date();
-    const lastDay = datesInGroup[datesInGroup.length - 1].date();
-    
-    // Check if dates are consecutive
-    let isConsecutive = true;
-    for (let i = 1; i < datesInGroup.length; i++) {
-      if (datesInGroup[i].date() !== datesInGroup[i-1].date() + 1) {
-        isConsecutive = false;
-        break;
+  if (!dates.length) return "—";
+  if (dates.length === 1) return dayjs(dates[0]).format("MMMM D, YYYY");
+
+  const list = dates
+    .filter(Boolean)
+    .map((d) => dayjs(d))
+    .sort((a, b) => a.valueOf() - b.valueOf());
+
+  // group by month-year
+  const groups = new Map();
+  for (const d of list) {
+    const key = d.format("MMMM YYYY"); // April 2026
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  }
+
+  const parts = [];
+  for (const [, arr] of groups.entries()) {
+    arr.sort((a, b) => a.valueOf() - b.valueOf());
+
+    // build consecutive ranges inside the month
+    const ranges = [];
+    let start = arr[0];
+    let prev = arr[0];
+
+    for (let i = 1; i < arr.length; i++) {
+      const cur = arr[i];
+      const isNextDay = cur.diff(prev, "day") === 1;
+
+      if (!isNextDay) {
+        ranges.push([start, prev]);
+        start = cur;
       }
+      prev = cur;
     }
-    
-    if (isConsecutive) {
-      // Consecutive dates: "Month Day-Day, Year"
-      return `${datesInGroup[0].format('MMMM')} ${firstDay}-${lastDay}, ${datesInGroup[0].format('YYYY')}`;
-    } else {
-      // Non-consecutive: list all dates with month only on first
-      return datesInGroup.map((d, idx) => {
-        if (idx === 0) return d.format('MMMM D');
-        return d.format('D');
-      }).join(', ') + `, ${datesInGroup[0].format('YYYY')}`;
-    }
-  });
-  
-  return formattedGroups.join(' and ');
+    ranges.push([start, prev]);
+
+    // format: "April 11, 13–18, 2026"
+    const year = arr[0].format("YYYY");
+    const month = arr[0].format("MMMM");
+
+    const daysText = ranges
+      .map(([s, e]) => {
+        const sd = s.date();
+        const ed = e.date();
+        return sd === ed ? `${sd}` : `${sd}–${ed}`;
+      })
+      .join(", ");
+
+    parts.push(`${month} ${daysText}, ${year}`);
+  }
+
+  return parts.join(" and ");
 }
 
 // ✅ Format Dayjs date list nicely (no repeated months)
@@ -453,6 +460,17 @@ function CalendarSection({
           };
           break;
 
+        case STATUS.APPROVED:
+          reservedStyle = {
+            bgcolor: "rgba(34, 197, 94, 0.15)",
+            borderColor: "success.main",
+            color: "success.dark",
+            fontWeight: 900,
+            boxShadow: "inset 0 0 0 1px",
+            "&:hover": { bgcolor: "rgba(34, 197, 94, 0.25)" },
+          };
+          break;
+
         case STATUS.SUBMITTED:
           reservedStyle = {
             bgcolor: "rgba(2, 132, 199, 0.15)",
@@ -491,12 +509,12 @@ function CalendarSection({
         // ACTIVE (default)
         default:
           reservedStyle = {
-            bgcolor: "rgba(79, 70, 229, 0.15)",
-            borderColor: "#4F46E5",
-            color: "#312E81",
+            bgcolor: "rgba(2, 132, 199, 0.15)",
+            borderColor: "info.main",
+            color: "info.dark",
             fontWeight: 900,
-            boxShadow: "inset 0 0 0 1px #4F46E5",
-            "&:hover": { bgcolor: "rgba(79, 70, 229, 0.25)" },
+            boxShadow: "inset 0 0 0 1px",
+            "&:hover": { bgcolor: "rgba(2, 132, 199, 0.25)" },
           };
       }
     }
@@ -619,8 +637,8 @@ function CalendarSection({
               </Typography>
 
               <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                <Chip size="small" label="Active" sx={{ fontWeight: 800, bgcolor: "rgba(79, 70, 229, 0.15)" }} />
                 <Chip size="small" label="Submitted" sx={{ fontWeight: 800, bgcolor: "rgba(2, 132, 199, 0.15)" }} />
+                <Chip size="small" label="Approved" sx={{ fontWeight: 800, bgcolor: "rgba(34, 197, 94, 0.15)" }} />
                 <Chip size="small" label="Canceled" sx={{ fontWeight: 800, bgcolor: "rgba(239, 68, 68, 0.15)" }} />
                 <Chip size="small" label="Archived" sx={{ fontWeight: 800, bgcolor: "rgba(245, 158, 11, 0.12)" }} />
                 <Chip size="small" label="Multiple statuses" sx={{ fontWeight: 800 }} />
@@ -1638,17 +1656,21 @@ function DayBookingsDialog({ open, dateStr, bookings = [], onClose, onPick, onCr
 
         <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
           <Button
-            onClick={() => onCreate?.(dateStr)}
+            onClick={onClose}
             variant="outlined"
+            size="small"
+            sx={{ fontWeight: 900 }}
+          >
+            Close
+          </Button>
+          <Button
+            onClick={() => onCreate?.(dateStr)}
+            variant="contained"
             size="small"
             sx={{ fontWeight: 900 }}
             disabled={!dateStr}
           >
             Create Reservation
-          </Button>
-
-          <Button onClick={onClose} variant="contained" size="small" sx={{ fontWeight: 900 }}>
-            Close
           </Button>
         </Box>
       </DialogActions>
@@ -1666,6 +1688,7 @@ function BookingDetailsDialog({
   onArchive,
   onDelete,
   onCancel,
+  onApprove,
   onPrint,
   onDownload,
 }) {
@@ -1863,133 +1886,160 @@ function BookingDetailsDialog({
           </Box>
         </Box>
       </DialogContent>
-
+      
+      {/* Booking Details Dialog */}
       <DialogActions
         sx={{
-          justifyContent: "space-between",
+          px: 2,
+          py: 1.25,
+          borderTop: "1px solid",
+          borderColor: "divider",
+          bgcolor: "background.paper",
+          display: "flex",
           alignItems: "center",
+          justifyContent: "space-between",
           gap: 1,
+          flexWrap: "wrap",
         }}
       >
-        {/* LEFT: actions */}
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            flexWrap: "nowrap",        // ✅ force one line
-            overflowX: "auto",         // ✅ if too tight, allow sideways scroll
-            maxWidth: "100%",
-            pr: 1,
-            "&::-webkit-scrollbar": { height: 6 },
-          }}
-        >
-          {onBack ? (
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<ArrowBackIosNewIcon />}
-              sx={{ whiteSpace: "nowrap" }}
-              onClick={onBack}
+      {(() => {
+        const st = getBookingStatus(booking);
+        const canPermit = st === STATUS.APPROVED;
+        
+        const canEdit = !(
+          st === STATUS.CANCELED ||
+          st === STATUS.ARCHIVED ||
+          isBookingPast(booking)
+        );
+        
+        const canApprove = st === STATUS.SUBMITTED;
+        const canCancel = !(
+          st === STATUS.CANCELED ||
+          st === STATUS.ARCHIVED ||
+          isBookingPast(booking)
+        );
+        
+        const showDelete = !!booking?.archived;
+        
+        return (
+          <Box sx={{ width: '100%' }}>
+            {/* FIRST ROW: SOA + Paid/Approve + Edit */}
+            <Stack 
+              direction="row" 
+              spacing={1} 
+              sx={{ mb: 1, flexWrap: 'wrap', alignItems: 'center' }}
             >
-              Back
-            </Button>
-          ) : null}
+              <ButtonGroup size="small" variant="outlined">
+                <Button
+                  startIcon={<PrintIcon />}
+                  onClick={() => onPrint?.(booking, "soa")}
+                >
+                  PRINT SOA
+                </Button>
+                <Button
+                  startIcon={<DownloadIcon />}
+                  onClick={() => onDownload?.(booking, "soa")}
+                >
+                  DOWNLOAD SOA
+                </Button>
+              </ButtonGroup>
+              
+              {canApprove && (
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="success"
+                  sx={{ fontWeight: 900 }}
+                  onClick={() => onApprove?.(booking)}
+                >
+                  PAID/APPROVED
+                </Button>
+              )}
+              
+              {canEdit && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<EditIcon />}
+                  onClick={() => onEdit?.(booking)}
+                >
+                  EDIT
+                </Button>
+              )}
+            </Stack>
 
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<PrintIcon />}
-            sx={{ whiteSpace: "nowrap" }}
-            onClick={() => onPrint?.(booking)}
-          >
-            Print
-          </Button>
-
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<DownloadIcon />}
-            sx={{ whiteSpace: "nowrap" }}
-            onClick={() => onDownload?.(booking)}
-          >
-            Download
-          </Button>
-
-          {(() => {
-            const st = getBookingStatus(booking);
-            const editDisabled =
-              st === STATUS.CANCELED ||
-              st === STATUS.ARCHIVED ||
-              isBookingPast(booking);
-
-            if (editDisabled) return null;
-
-            return (
+            {/* SECOND ROW: PERMIT + Cancel + Archived */}
+            <Stack 
+              direction="row" 
+              spacing={1} 
+              sx={{ flexWrap: 'wrap', alignItems: 'center' }}
+            >
+              <ButtonGroup size="small" variant="outlined">
+                <Button
+                  startIcon={<PrintIcon />}
+                  disabled={!canPermit}
+                  onClick={() => onPrint?.(booking, "permit")}
+                >
+                  PRINT PERMIT
+                </Button>
+                <Button
+                  startIcon={<DownloadIcon />}
+                  disabled={!canPermit}
+                  onClick={() => onDownload?.(booking, "permit")}
+                >
+                  DOWNLOAD PERMIT
+                </Button>
+              </ButtonGroup>
+              
+              {canCancel && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  startIcon={<CloseIcon />}
+                  onClick={() => onCancel?.(booking)}
+                >
+                  CANCEL
+                </Button>
+              )}
+              
               <Button
                 size="small"
                 variant="outlined"
-                startIcon={<EditIcon />}
-                sx={{ whiteSpace: "nowrap" }}
-                onClick={() => onEdit?.(booking)}
+                startIcon={<ArchiveIcon />}
+                onClick={() => onArchive?.(booking)}
               >
-                Edit
+                ARCHIVED
               </Button>
-            );
-          })()}
 
-          {/* ✅ ADD THIS BLOCK RIGHT AFTER EDIT */}
-          {(() => {
-            const st = getBookingStatus(booking);
-            const hideCancel =
-              st === STATUS.CANCELED ||
-              st === STATUS.ARCHIVED ||
-              isBookingPast(booking);
+              {/* Delete - only if archived, separate */}
+              {showDelete && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  startIcon={<DeleteIcon />}
+                  onClick={() => onDelete?.(booking)}
+                >
+                  DELETE
+                </Button>
+              )}
+            </Stack>
 
-            if (hideCancel) return null;
-
-            return (
+            {/* CLOSE button at the bottom */}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
               <Button
+                onClick={onClose}
+                variant="contained"
                 size="small"
-                variant="outlined"
-                color="error"
-                sx={{ whiteSpace: "nowrap" }}
-                onClick={() => onCancel?.(booking)}
+                sx={{ fontWeight: 900 }}
               >
-                Cancel
+                CLOSE
               </Button>
-            );
-          })()}
-
-          <Button
-            size="small"
-            variant="outlined"
-            color={booking?.archived ? "success" : "warning"}
-            startIcon={<ArchiveIcon />}
-            sx={{ whiteSpace: "nowrap" }}
-            onClick={() => onArchive?.(booking)}
-          >
-            {booking?.archived ? "Unarchive" : "Archive"}
-          </Button>
-
-          {booking?.archived ? (
-            <Button
-              size="small"
-              variant="contained"
-              color="error"
-              startIcon={<DeleteIcon />}
-              sx={{ whiteSpace: "nowrap" }}
-              onClick={() => onDelete?.(booking)}
-            >
-              Delete
-            </Button>
-          ) : null}
-        </Box>
-
-        {/* RIGHT: close */}
-        <Button onClick={onClose} variant="contained" size="small" sx={{ whiteSpace: "nowrap" }}>
-          Close
-        </Button>
+            </Box>
+          </Box>
+        );
+      })()}
       </DialogActions>
     </Dialog>
   );
@@ -2157,10 +2207,10 @@ function BookingHistory({
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <MenuItem value="ALL">All</MenuItem>
-                <MenuItem value={STATUS.ACTIVE}>Active</MenuItem>
-                <MenuItem value={STATUS.SUBMITTED}>Submitted</MenuItem>
-                <MenuItem value={STATUS.CANCELED}>Canceled</MenuItem>
-                <MenuItem value={STATUS.ARCHIVED}>Archived</MenuItem>
+                  <MenuItem value={STATUS.SUBMITTED}>Submitted</MenuItem>
+                  <MenuItem value={STATUS.APPROVED}>Approved</MenuItem>
+                  <MenuItem value={STATUS.CANCELED}>Canceled</MenuItem>
+                  <MenuItem value={STATUS.ARCHIVED}>Archived</MenuItem>
               </Select>
             </FormControl>
           </Box>
@@ -2269,7 +2319,6 @@ function BookingHistory({
                       </Typography>
                         {(() => {
                           const st = getBookingStatus(b);
-                          if (st === STATUS.ACTIVE) return null; // keep clean if you want
                           const props = getStatusChipProps(st);
                           return <Chip size="small" label={props.label} color={props.color} variant={props.variant} />;
                         })()}
@@ -2448,6 +2497,9 @@ export default function SchedulePage() {
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelDialogBooking, setCancelDialogBooking] = React.useState(null);
 
+  const [approveDialogOpen, setApproveDialogOpen] = React.useState(false);
+  const [approveDialogBooking, setApproveDialogBooking] = React.useState(null);
+
   const filteredBookings = React.useMemo(() => {
     const q = search.trim().toLowerCase();
 
@@ -2596,15 +2648,15 @@ export default function SchedulePage() {
     setDeleteDialogOpen(true);
   };
 
-  const openPrint = (b) => {
-    setPrintDocType("permit");
+  const openPrint = (b, docType) => {
+    setPrintDocType(docType || "soa");
     setPrintMode("print");
     setPrintBooking(b);
     setPrintOpen(true);
   };
 
-  const openDownload = (b) => {
-    setPrintDocType("permit");
+  const openDownload = (b, docType) => {
+    setPrintDocType(docType || "soa");
     setPrintMode("download");
     setPrintBooking(b);
     setPrintOpen(true);
@@ -2667,6 +2719,44 @@ export default function SchedulePage() {
   const handleCancelArchive = () => {
     setArchiveDialogOpen(false);
     setArchiveDialogBooking(null);
+  };
+
+  const handleApproveBooking = (b) => {
+  if (!b?.id) return;
+
+    const st = getBookingStatus(b);
+      if (st !== STATUS.SUBMITTED) return;
+
+    setApproveDialogBooking(b);
+    setApproveDialogOpen(true);
+  };
+
+  const handleCancelApprove = () => {
+    setApproveDialogOpen(false);
+    setApproveDialogBooking(null);
+  };
+
+  const handleConfirmApprove = async () => {
+    if (!approveDialogBooking?.id) return;
+
+    try {
+      const res = await axios.patch(`${API}/bookings/${approveDialogBooking.id}/approve`);
+      const updated = res.data;
+
+      setBookings((prev) =>
+        prev.map((x) => (x.id === updated.id ? updated : x))
+      );
+
+      if (detailsBooking?.id === updated.id) {
+        setDetailsBooking(updated);
+      }
+
+      setApproveDialogOpen(false);
+      setApproveDialogBooking(null);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to approve reservation.");
+    }
   };
 
   const handleCancelBooking = (b) => {
@@ -2893,9 +2983,53 @@ export default function SchedulePage() {
         onArchive={(b) => handleArchiveBooking(b)}
         onDelete={(b) => handleDeleteBooking(b)}
         onCancel={(b) => handleCancelBooking(b)}
-        onPrint={(b) => openPrint(b)}
-        onDownload={(b) => openDownload(b)}
+        onApprove={(b) => handleApproveBooking(b)}
+        onPrint={(b, docType) => openPrint(b, docType)}
+        onDownload={(b, docType) => openDownload(b, docType)}
       />
+
+      {/* ✅ Approve (Paid) Dialog */}
+      <Dialog
+        open={approveDialogOpen}
+        onClose={handleCancelApprove}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 900 }}>Mark as Paid (Approve)</DialogTitle>
+        <DialogContent>
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              Are you sure you want to mark this reservation as <b>PAID</b> and set status to <b>APPROVED</b>?
+            </Typography>
+
+            {approveDialogBooking && (
+              <Box sx={{ p: 1.5, bgcolor: "action.hover", borderRadius: 1, mb: 2 }}>
+                <Typography variant="body2" component="div">
+                  <strong>Event:</strong> {approveDialogBooking.eventName}<br />
+                  <strong>Requested by:</strong> {approveDialogBooking.requestedBy}<br />
+                  <strong>Date:</strong> {formatDateRange(approveDialogBooking)}<br />
+                  <strong>Amount:</strong> ₱{Number(approveDialogBooking.amount ?? 0).toLocaleString()}
+                </Typography>
+              </Box>
+            )}
+
+            <Typography sx={{ color: "success.main", fontWeight: 800 }}>
+              After approving, you can print the Venue Permit.
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelApprove}>Cancel</Button>
+          <Button
+            onClick={handleConfirmApprove}
+            color="success"
+            variant="contained"
+            sx={{ fontWeight: 800 }}
+          >
+            Confirm Approve
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ✅ Cancel Dialog */}
       <Dialog

@@ -160,4 +160,4 @@ tmp/
 *.sqlite3
 *.db
 
-released/
+release

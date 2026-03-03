@@ -44,8 +44,6 @@ import {
 import Topbar from "@/components/Topbar.jsx";
 import PrintDialog from "@/components/Print.jsx";
 
-import MoreVertIcon from "@mui/icons-material/MoreVert";
-
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
@@ -58,10 +56,6 @@ import { PickersDay } from "@mui/x-date-pickers/PickersDay";
 import CloseIcon from "@mui/icons-material/Close";
 
 import TablePagination from "@mui/material/TablePagination";
-import TableSortLabel from "@mui/material/TableSortLabel";
-
-import ArrowBackIosNewIcon from "@mui/icons-material/ArrowBackIosNew";
-import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
 
 import PrintIcon from "@mui/icons-material/Print";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -653,8 +647,11 @@ function CalendarSection({
               value={calendarMonth}
               onViewChange={onViewChange}
               onMonthChange={(newMonth) => {
-                onMonthChange?.(newMonth);
-                onViewChange?.("day");
+                // Only update the month if the user explicitly selects it
+                if (!calendarMonth.isSame(newMonth, 'month')) {
+                  onMonthChange?.(newMonth);  // Update month based on user selection
+                }
+                onViewChange?.("day");  // Ensure we switch to day view after changing month
               }}
               showDaysOutsideCurrentMonth={false}
               slots={{ day: MultiPickDay }}
@@ -754,6 +751,39 @@ function CalendarSection({
                   border: "1px solid",
                   borderColor: "divider",
                   opacity: 0.35,
+                },
+                
+                // ✅ MAKE ARROWS ACTUALLY VISIBLE AND IMPROVED
+                "& .MuiPickersArrowSwitcher-button": {
+                  backgroundColor: "#1976d2",
+                  color: "white",
+                  borderRadius: "50%",
+                  width: 36,
+                  height: 36,
+                  margin: "0 1px", // Decreased margin between buttons
+                  transition: "all 0.2s",
+                  border: "none",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+                  "&:hover": {
+                    backgroundColor: "#1565c0",
+                    transform: "scale(1.05)",
+                    boxShadow: "0 4px 8px rgba(0,0,0,0.3)",
+                  },
+                  "&:active": {
+                    transform: "scale(0.95)",
+                  },
+                  "& .MuiSvgIcon-root": {
+                    fontSize: "1.5rem",
+                  },
+                },
+                // Make the header layout better
+                "& .MuiPickersCalendarHeader-root": {
+                  padding: "8px 12px",
+                  marginBottom: "4px",
+                },
+                "& .MuiPickersArrowSwitcher-root": {
+                  display: "flex",
+                  gap: "4px",
                 },
               }}
             />
@@ -1027,7 +1057,6 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     if (venue === "Others" && !otherVenue.trim()) {
       return notify("Please specify the Venue.", "warning");
     }
-    if (safeAmount <= 0) return notify("Please enter a valid Amount.", "warning");
 
     const finalVenue = venue === "Others" ? otherVenue.trim() : venue;
     const isEdit = !!initialBooking?.id;
@@ -1157,9 +1186,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     if (!requestedBy.trim()) return notify("Please enter Requested by (Name).", "warning");
     if (!eventName.trim()) return notify("Please enter Event Name.", "warning");
     if (!venue) return notify("Please select a Venue.", "warning");
-    if (safeAmount <= 0) return notify("Please enter a valid Amount.", "warning");
     if (!venue) return notify("Please select a Venue.", "warning");
-    if (safeAmount <= 0) return notify("Please enter a valid Amount.", "warning");
 
     const isEdit = !!initialBooking?.id;
     const dateList = (isEdit ? [dates?.[0]] : (dates || [])).filter(Boolean);
@@ -2927,8 +2954,14 @@ export default function SchedulePage() {
 
           // ✅ Clear selected days after successful submit/update
           setSelectedDates([]);
-          // optional: keep calendar focused on current month
-          setCalendarMonth(dayjs());
+          
+          // ✅ IMPORTANT: Keep the calendar on the month of the submitted date
+          // Get the first date from the created booking
+          const firstDate = created?.dates?.[0] || created?.date;
+          if (firstDate) {
+            setCalendarMonth(dayjs(firstDate));
+          }
+          // If no date found, keep current calendar month (don't reset to today)
 
           // ✅ open print
           setPrintMode("print");

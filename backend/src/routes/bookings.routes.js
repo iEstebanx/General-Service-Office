@@ -239,10 +239,12 @@ router.post("/", (req, res) => {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  const computedAmount = Number(amount);
+  const computedAmount = amount === "" || amount == null ? 0 : Number(amount);
   const finalStatus = normalizeStatus(status) || STATUS.SUBMITTED;
-  if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
-    return res.status(400).json({ message: "Amount is required" });
+
+  // Make sure it's a valid number (allow 0)
+  if (!Number.isFinite(computedAmount) || computedAmount < 0) {
+    return res.status(400).json({ message: "Amount must be a valid positive number" });
   }
 
   try {
@@ -326,10 +328,12 @@ router.put("/:id", (req, res) => {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  const computedAmount = Number(amount);
+  const computedAmount = amount === "" || amount == null ? 0 : Number(amount);
   const finalStatus = normalizeStatus(status) || STATUS.SUBMITTED;
-  if (!Number.isFinite(computedAmount) || computedAmount <= 0) {
-    return res.status(400).json({ message: "Amount is required" });
+
+  // Make sure it's a valid number (allow 0)
+  if (!Number.isFinite(computedAmount) || computedAmount < 0) {
+    return res.status(400).json({ message: "Amount must be a valid positive number" });
   }
 
   try {

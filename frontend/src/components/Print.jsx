@@ -232,26 +232,45 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
         .print-root, .print-root * { box-sizing: border-box; }
 
         /* This is the fixed page canvas */
+        /* This is the page canvas - NOW it will size naturally */
         .print-page {
           width: 8.5in;
-          height: 11in;
-          padding: 0.45in 0.55in;  /* adjust if you want more/less margins */
+          height: auto;            /* CRITICAL: auto height for preview */
+          padding: 0.45in 0.55in;
           font-family: Arial, sans-serif;
           color: #111;
-          overflow: hidden;        /* CRITICAL: prevents accidental 2nd page */
+          overflow: visible;
           display: flex;
           flex-direction: column;
           gap: 0.18in;
+          background: white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1); /* Optional: adds definition */
         }
 
-        /* Each section expands to fill vertical space */
+        /* Remove the min-height and the @media print section for .print-page */
+        /* Keep only this for actual printing: */
+        @media print {
+          .print-page {
+            height: 11in;
+            box-shadow: none;
+          }
+        }
+
+                /* Each section expands to fill vertical space */
         .section {
-          flex: 1;
+          flex: 0 0 auto;          /* Don't stretch */
           display: flex;
           flex-direction: column;
           justify-content: flex-start;
           break-inside: avoid;
           page-break-inside: avoid;
+        }
+
+        /* Only in print mode should sections fill the page */
+        @media print {
+          .section {
+            flex: 1;
+          }
         }
 
         /* optional: add some breathing room below the content */
@@ -359,9 +378,10 @@ export default function PrintDialog({
   `;
 
   const handlePrint = useReactToPrint({
-    content: () => printRef.current,
+    contentRef: printRef,  // CHANGE: use contentRef instead of content
     documentTitle: booking?.venue ? `${booking.venue}-permit-soa` : "permit-soa",
     pageStyle,
+    onPrintError: (error) => console.error("Print error:", error),
   });
 
   const handleDownload = React.useCallback(async () => {
@@ -435,10 +455,22 @@ export default function PrintDialog({
           : "Permit + Statement of Account"}
       </DialogTitle>
 
-      <DialogContent dividers sx={{ p: 1 }}>
+      <DialogContent dividers sx={{ p: 1, overflow: "hidden" }}>
         {/* preview container */}
-        <Box ref={printRef} sx={{ display: "flex", justifyContent: "center" }}>
-          <CombinedPermitAndSOA booking={booking} docType={docType} />
+        <Box 
+          sx={{ 
+            display: "flex", 
+            justifyContent: "center",
+            maxHeight: "70vh",
+            overflow: "auto",
+            bgcolor: "#f5f5f5",
+            borderRadius: 1
+          }}
+        >
+          {/* THIS is what will be printed - ref directly on the content */}
+          <div ref={printRef}>
+            <CombinedPermitAndSOA booking={booking} docType={docType} />
+          </div>
         </Box>
       </DialogContent>
 

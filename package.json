@@ -48,7 +48,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "desktop/assets/icon.ico"
+      "icon": "desktop/assets/LGUNoveleta.ico"
     },
     "nsis": {
       "oneClick": false,

@@ -2,6 +2,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { CssBaseline } from "@mui/material";
 
+import WelcomePage from "./pages/WelcomePage.jsx";
 import SchedulePage from "./pages/SchedulePage.jsx";
 import BackofficeLogin from "./pages/Backoffice/BackofficeLogin.jsx";
 import BackofficeLayout from "./layouts/BackofficeLayout.jsx";
@@ -19,7 +20,8 @@ export default function App() {
     <>
       <CssBaseline />
       <Routes>
-        <Route path="/" element={<SchedulePage />} />
+        <Route path="/" element={<WelcomePage />} />
+        <Route path="/schedule" element={<SchedulePage />} />
 
         <Route path="/backoffice/login" element={<BackofficeLogin />} />
 

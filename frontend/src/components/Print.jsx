@@ -161,7 +161,7 @@ function GovHeader() {
 
 function ApprovalBlock() {
   return (
-        <Box className="approval">
+    <Box sx={{ mt: 0.75, display: "flex", justifyContent: "flex-end" }}>  {/* Changed from 0.35 to 0.75 */}
       <Box sx={{ display: "grid", gridTemplateColumns: "auto auto", columnGap: 2 }}>
         <Typography sx={{ fontWeight: 900, fontSize: 14 }}>Approved by:</Typography>
         <Box>
@@ -198,7 +198,7 @@ function TwoColResources({ r }) {
   );
 }
 
-// ✅ Force the print layout to fill ONE Letter page
+// ✅ Fixed layout - content starts at top, not centered
 const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ booking, docType }, ref) {
   if (!booking) return null;
 
@@ -210,13 +210,14 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
 
   const showPermit = docType === "permit" || docType === "both";
   const showSOA = docType === "soa" || docType === "both";
-  const showDivider = showPermit && showSOA;
 
   return (
     <Box ref={ref} className="print-root">
       <style>{`
-        /* ====== HARD FORCE: SHORT BOND / LETTER PORTRAIT ====== */
-        @page { size: 8.5in 11in; margin: 0; }
+        @page { 
+          size: 8.5in 11in; 
+          margin: 0.5in;  /* Add margin for proper printing */
+        }
 
         @media print {
           html, body {
@@ -229,127 +230,83 @@ const CombinedPermitAndSOA = React.forwardRef(function CombinedPermitAndSOA({ bo
           }
         }
 
-        .print-root, .print-root * { box-sizing: border-box; }
-
-        /* This is the fixed page canvas */
-        /* This is the page canvas - NOW it will size naturally */
-        .print-page {
+        .print-root {
           width: 8.5in;
-          height: auto;            /* CRITICAL: auto height for preview */
-          padding: 0.45in 0.55in;
-          font-family: Arial, sans-serif;
-          color: #111;
-          overflow: visible;
-          display: flex;
-          flex-direction: column;
-          gap: 0.18in;
+          min-height: 11in;
           background: white;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.1); /* Optional: adds definition */
+          font-family: Arial, sans-serif;
         }
 
-        /* Remove the min-height and the @media print section for .print-page */
-        /* Keep only this for actual printing: */
-        @media print {
-          .print-page {
-            height: 11in;
-            box-shadow: none;
-          }
+        .print-page {
+          padding: 0.25in 0.5in;  /* Padding from edges */
+          width: 100%;
+          height: 100%;
         }
 
-                /* Each section expands to fill vertical space */
-        .section {
-          flex: 0 0 auto;          /* Don't stretch */
-          display: flex;
-          flex-direction: column;
-          justify-content: flex-start;
-          break-inside: avoid;
-          page-break-inside: avoid;
-        }
-
-        /* Only in print mode should sections fill the page */
-        @media print {
-          .section {
-            flex: 1;
-          }
-        }
-
-        /* optional: add some breathing room below the content */
-        .approval {
-          margin-top: 0.35in;
-          display: flex;
-          justify-content: flex-end;
+        .content-section {
+          margin-bottom: 0.25in;
         }
 
         .title {
           text-align: center;
           font-weight: 900;
           font-size: 20px;
-          margin-top: 0.12in;
-          margin-bottom: 0.12in;
+          margin: 0.25in 0;
         }
 
         .divider {
           border-top: 2px dashed #888;
           width: 100%;
-          margin: 0;
-          break-inside: avoid;
-          page-break-inside: avoid;
+          margin: 0.2in 0;
         }
-
-        /* safety: don’t allow weird breaks */
-        .no-break { break-inside: avoid; page-break-inside: avoid; }
       `}</style>
 
       <Box className="print-page">
-        {/* ===================== PERMIT ===================== */}
+        {/* PERMIT SECTION */}
         {showPermit && (
-          <Box className="section">
-            <Box className="no-break">
-              <GovHeader />
+          <Box className="content-section">
+            <GovHeader />
+            <Typography className="title">{venueTitle}</Typography>
 
-              <Typography className="title">{venueTitle}</Typography>
+            <Box sx={{ mt: 0.1 }}>
+              <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
+              <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
+              <InfoRow label="Date" value={formatDateDisplay(booking)} />
+              <InfoRow label="Time" value={formatTimeDisplay(booking)} />
 
-              <Box sx={{ mt: 0.3 }}>
-                <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
-                <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
-                <InfoRow label="Date" value={formatDateDisplay(booking)} />
-                <InfoRow label="Time" value={formatTimeDisplay(booking)} />
-
-                <TwoColResources r={r} />
-              </Box>
+              <TwoColResources r={r} />
             </Box>
 
-            <Box className="no-break">
-              <ApprovalBlock />
-            </Box>
+            {/* Add spacer div here */}
+            <div style={{ height: '60px', width: '100%' }}></div>
+
+            <ApprovalBlock />
           </Box>
         )}
 
-        {/* Divider */}
-        {showDivider && <Box className="divider" />}
+        {/* DIVIDER */}
+        {showPermit && showSOA && <Box className="divider" />}
 
-        {/* ===================== SOA ===================== */}
+        {/* SOA SECTION */}
         {showSOA && (
-          <Box className="section">
-            <Box className="no-break">
-              <GovHeader />
+          <Box className="content-section">
+            <GovHeader />
+            <Typography className="title">STATEMENT OF ACCOUNT</Typography>
 
-              <Typography className="title">STATEMENT OF ACCOUNT</Typography>
+            <Box sx={{ mt: 0.1 }}>
+              <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
+              <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
+              <InfoRow label="Date" value={formatDateDisplay(booking)} />
+              <InfoRow label="Time" value={formatTimeDisplay(booking)} />
+              <InfoRow label="Amount" value={amountText} />
 
-              <Box sx={{ mt: 0.3 }}>
-                <InfoRow label="Requested by" value={booking.requestedBy ?? "—"} />
-                <InfoRow label="Event Name" value={booking.eventName ?? "—"} />
-                <InfoRow label="Date" value={formatDateDisplay(booking)} />
-                <InfoRow label="Time" value={formatTimeDisplay(booking)} />
-                <InfoRow label="Amount" value={amountText} />
-
-                <TwoColResources r={r} />
-              </Box>
+              <TwoColResources r={r} />
             </Box>
 
-            <Box className="no-break">
-              <ApprovalBlock />
-            </Box>
+            {/* Add spacer div here */}
+            <div style={{ height: '60px', width: '100%' }}></div>
+
+            <ApprovalBlock />
           </Box>
         )}
       </Box>
@@ -368,18 +325,30 @@ export default function PrintDialog({
 }) {
   const printRef = React.useRef(null);
 
-  // react-to-print pageStyle also forces Letter
   const pageStyle = `
-    @page { size: 8.5in 11in; margin: 0; }
+    @page { 
+      size: 8.5in 11in; 
+      margin: 0.25in; 
+    }
     @media print {
-      html, body { margin: 0 !important; padding: 0 !important; }
-      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      html, body { 
+        margin: 0 !important; 
+        padding: 0 !important; 
+        width: 8.5in;
+        height: 11in;
+      }
+      * { 
+        -webkit-print-color-adjust: exact !important; 
+        print-color-adjust: exact !important; 
+      }
     }
   `;
 
   const handlePrint = useReactToPrint({
-    contentRef: printRef,  // CHANGE: use contentRef instead of content
-    documentTitle: booking?.venue ? `${booking.venue}-permit-soa` : "permit-soa",
+    contentRef: printRef,
+    documentTitle: booking?.venue 
+      ? `${booking.venue}-${docType}` 
+      : docType,
     pageStyle,
     onPrintError: (error) => console.error("Print error:", error),
   });
@@ -389,39 +358,45 @@ export default function PrintDialog({
 
     const node = printRef.current;
 
+    // Set fixed dimensions for capture
+    node.style.width = '8.5in';
+    node.style.height = '11in';
+    
     const canvas = await html2canvas(node, {
       scale: 2,
       useCORS: true,
       backgroundColor: "#ffffff",
-      windowWidth: node.scrollWidth,
-      windowHeight: node.scrollHeight,
+      windowWidth: 8.5 * 96, // Convert inches to pixels (96 DPI)
+      windowHeight: 11 * 96,
     });
+
+    // Reset styles
+    node.style.width = '';
+    node.style.height = '';
 
     const imgData = canvas.toDataURL("image/png");
 
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
+    const pdf = new jsPDF({ 
+      orientation: "portrait", 
+      unit: "in", 
+      format: "letter" 
+    });
 
-    // Since our node is EXACTLY letter size, we can fit it cleanly in 1 page
-    const pxToMm = (px) => px * 0.264583;
+    // Add image to PDF starting from top (y=0) instead of centered
+    pdf.addImage(imgData, "PNG", 0, 0, 8.5, 11, undefined, "FAST");
 
-    const imgW = pxToMm(canvas.width);
-    const imgH = pxToMm(canvas.height);
-
-    // Fill page while keeping aspect ratio (should match already)
-    const scale = Math.min(pageW / imgW, pageH / imgH);
-    const w = imgW * scale;
-    const h = imgH * scale;
-
-    const x = (pageW - w) / 2;
-    const y = (pageH - h) / 2;
-
-    pdf.addImage(imgData, "PNG", x, y, w, h, undefined, "FAST");
-
-    const filename = booking?.venue ? `${booking.venue}-permit-soa.pdf` : "permit-soa.pdf";
+    // Fix filename based on docType
+    let filename;
+    if (docType === "permit") {
+      filename = booking?.venue ? `${booking.venue}-permit.pdf` : "permit.pdf";
+    } else if (docType === "soa") {
+      filename = booking?.venue ? `${booking.venue}-soa.pdf` : "soa.pdf";
+    } else {
+      filename = booking?.venue ? `${booking.venue}-permit-soa.pdf` : "permit-soa.pdf";
+    }
+    
     pdf.save(filename);
-  }, [booking]);
+  }, [booking, docType]);
 
   React.useEffect(() => {
     if (!open || !autoPrint) return;
@@ -455,19 +430,17 @@ export default function PrintDialog({
           : "Permit + Statement of Account"}
       </DialogTitle>
 
-      <DialogContent dividers sx={{ p: 1, overflow: "hidden" }}>
-        {/* preview container */}
+      <DialogContent dividers sx={{ p: 1, overflow: "auto" }}>
         <Box 
           sx={{ 
             display: "flex", 
             justifyContent: "center",
-            maxHeight: "70vh",
-            overflow: "auto",
             bgcolor: "#f5f5f5",
-            borderRadius: 1
+            borderRadius: 1,
+            overflow: "auto",
+            maxHeight: "70vh"
           }}
         >
-          {/* THIS is what will be printed - ref directly on the content */}
           <div ref={printRef}>
             <CombinedPermitAndSOA booking={booking} docType={docType} />
           </div>
@@ -476,25 +449,17 @@ export default function PrintDialog({
 
       <DialogActions>
         <Button onClick={onClose}>Close</Button>
-
         <Button
           variant="outlined"
           sx={{ fontWeight: 900 }}
-          onClick={() => {
-            if (!printRef.current) return;
-            handleDownload?.();
-          }}
+          onClick={handleDownload}
         >
           Download PDF
         </Button>
-
         <Button
           variant="contained"
           sx={{ fontWeight: 900 }}
-          onClick={() => {
-            if (!printRef.current) return;
-            handlePrint?.();
-          }}
+          onClick={handlePrint}
         >
           Print
         </Button>

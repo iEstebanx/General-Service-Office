@@ -47,15 +47,20 @@ function waitForHealth(url, timeoutMs = 20000, intervalMs = 400) {
   });
 }
 
+const iconPath = path.join(__dirname, "assets", "LGUNoveleta.ico");
+
 function createWindow(port) {
   const win = new BrowserWindow({
     width: 1200,
     height: 760,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: "#ffffff", // 👈 add here
-    icon: path.join(__dirname, "assets", "icon.ico"),
+    backgroundColor: "#ffffff",
+    icon: iconPath,
   });
+
+  "DEVELOPER MODE"
+  // win.webContents.openDevTools();
 
   win.loadURL(`http://127.0.0.1:${port}`);
 
@@ -138,12 +143,16 @@ backendProcess.on("error", (e) => {
 }
 
 app.whenReady().then(async () => {
+  // ✅ Set app icon for taskbar (important for dev mode on Windows)
+  if (process.platform === "win32") {
+    app.setAppUserModelId("com.gso.reservationsystem"); // matches your appId
+  }
+
   const { port } = startBackend();
 
   try {
     await waitForHealth(`http://127.0.0.1:${port}/api/health`, 25000);
   } catch (e) {
-    // even if health fails, still open (useful for debugging)
     console.error(e);
   }
 

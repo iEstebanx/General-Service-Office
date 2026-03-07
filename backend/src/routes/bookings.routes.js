@@ -11,10 +11,7 @@ const STATUS = {
 function normalizeStatus(raw) {
   const s = String(raw ?? "").trim().toUpperCase();
   if (!s) return null;
-
-  // ✅ legacy: normalize ACTIVE -> SUBMITTED
   if (s === "ACTIVE") return STATUS.SUBMITTED;
-
   if (!Object.values(STATUS).includes(s)) return null;
   return s;
 }
@@ -173,11 +170,30 @@ function hydrateBooking(db, b) {
 
 // ---------- routes ----------
 
-// GET bookings (optional filter by date=YYYY-MM-DD)
+// Update the GET route with better error handling
 router.get("/", (req, res) => {
   try {
     const db = getDb(req);
+    
+    // Verify database connection
+    if (!db) {
+      console.error("❌ Database not available in request");
+      return res.status(500).json({ message: "Database not available" });
+    }
+    
     const { date } = req.query;
+
+    // Test if bookings table exists
+    try {
+      const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='bookings'").get();
+      if (!tableCheck) {
+        console.error("❌ Bookings table does not exist");
+        return res.status(500).json({ message: "Database schema not initialized properly" });
+      }
+    } catch (tableErr) {
+      console.error("❌ Error checking tables:", tableErr);
+      return res.status(500).json({ message: "Database error", error: tableErr.message });
+    }
 
     // validate date if provided
     if (date != null) {
@@ -206,8 +222,13 @@ router.get("/", (req, res) => {
 
     res.json(rows.map((b) => hydrateBooking(db, b)));
   } catch (e) {
-    console.error("GET /api/bookings error:", e);
-    res.status(500).json({ message: "Failed to load bookings.", error: e.message });
+    console.error("🔥 GET /api/bookings error:", e);
+    console.error("Stack trace:", e.stack);
+    res.status(500).json({ 
+      message: "Failed to load bookings.", 
+      error: e.message,
+      stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+    });
   }
 });
 

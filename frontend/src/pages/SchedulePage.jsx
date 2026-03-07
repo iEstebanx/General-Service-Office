@@ -615,16 +615,18 @@ function CalendarSection({ calendarView, selectedDates, onToggleDate, onViewChan
             }}
             sx={{
               position: "absolute", top: 2, right: 3,
-              width: 18, height: 18, borderRadius: "999px",  // ← slightly bigger circle
+              width: 18, height: 18, borderRadius: "999px",
               bgcolor: "rgba(0,0,0,0.55)", color: "#fff",
-              fontSize: "0.68rem", fontWeight: 900,           // ← bigger font (was 0.55rem)
+              fontSize: "0.85rem", 
+              fontWeight: 900,
+              fontFamily: "'JetBrains Mono', monospace !important",
               display: "flex", alignItems: "center", justifyContent: "center",
               cursor: "pointer", zIndex: 2,
               "&:hover": { bgcolor: "rgba(0,0,0,0.75)", transform: "scale(1.15)" },
               transition: "all 0.15s",
             }}
           >
-            {(displayList?.length || 0) > 1 ? displayList.length : "i"}
+            {(reservedList?.length || 0) > 1 ? reservedList.length : "i"} {/* Use original reservedList */}
           </Box>
         )}
       </Box>
@@ -861,7 +863,8 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
     const ignoreId = initialBooking?.id ?? null;
     for (const b of (existingBookings || [])) {
       if (ignoreId && b.id === ignoreId) continue;
-      if (b.archived || b.venue !== finalVenue) continue;
+      const bStatus = getBookingStatus(b);
+      if (b.archived || bStatus === STATUS.CANCELED || bStatus === STATUS.ARCHIVED || b.venue !== finalVenue) continue;
       const bDates = bookingDates(b), bs = toMins(b.startTime), be = toMins(b.endTime);
       if (!Number.isFinite(bs) || !Number.isFinite(be)) continue;
       for (const d of dateStrs) {
@@ -1077,8 +1080,7 @@ function BookingDrawer({ open, onClose, selectedDates, onBooked, initialBooking,
 }
 
 // ─── Day Bookings Dialog ──────────────────────────────────────────────────────
-// ─── Day Bookings Dialog ──────────────────────────────────────────────────────
-function DayBookingsDialog({ open, dateStr, bookings = [], onClose, onPick, onCreate, onAddToSelection }) {
+function DayBookingsDialog({ open, dateStr, bookings = [], onClose, onPick, onCreate, onAddToSelection, isSelected }) {
   const list = [...(Array.isArray(bookings) ? bookings : [])].sort((a, b) =>
     String(a.startTime || "").localeCompare(String(b.startTime || ""))
   );
@@ -1169,25 +1171,35 @@ function DayBookingsDialog({ open, dateStr, bookings = [], onClose, onPick, onCr
         </Typography>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
           <Button
-            onClick={() => onAddToSelection?.(dateStr)}
-            variant="outlined"
-            size="small"
-            disabled={!dateStr}
-            sx={{
-              fontWeight: 800, borderRadius: "8px",
-              borderColor: G.border, color: G[700],
-              "&:hover": { borderColor: G[500], bgcolor: G[100] },
-            }}
-          >
-            ＋ Add to Selection
-          </Button>
-          <Button
             onClick={onClose}
             variant="outlined"
             size="small"
             sx={{ fontWeight: 800, borderRadius: "8px" }}
           >
             Close
+          </Button>
+          <Button
+            onClick={() => onAddToSelection?.(dateStr)}
+            variant="contained"  // Changed from conditional to always contained
+            size="small"
+            disabled={!dateStr}
+            sx={{
+              fontWeight: 800, 
+              borderRadius: "8px",
+              background: isSelected 
+                ? "#ef4444"  // Red when selected
+                : `linear-gradient(135deg, ${G[500]}, ${G[700]})`, // Green gradient when not selected
+              boxShadow: isSelected 
+                ? "0 2px 8px rgba(239, 68, 68, 0.4)" 
+                : `0 2px 8px ${G.glow}`,
+              "&:hover": { 
+                background: isSelected 
+                  ? "#dc2626" 
+                  : `linear-gradient(135deg, ${G[400]}, ${G[600]})` 
+              },
+            }}
+          >
+            {isSelected ? "✕ Remove from Selection" : "＋ Add to Selection"}
           </Button>
           <Button
             onClick={() => onCreate?.(dateStr)}
@@ -1312,15 +1324,30 @@ function BookingDetailsDialog({ open, booking, onClose, onEdit, onArchive, onDel
           const showDelete = !!booking?.archived;
           return (
             <Box>
-              <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: "wrap" }}>
+              {/* Single row with all buttons that wrap naturally */}
+              <Stack 
+                direction="row" 
+                spacing={1} 
+                sx={{ 
+                  mb: 1, 
+                  flexWrap: "wrap", 
+                  gap: 1,
+                  alignItems: "center"
+                }}
+              >
+                {/* SOA Button Group */}
                 <ButtonGroup size="small" variant="outlined">
                   <Button startIcon={<PrintIcon />} onClick={() => onPrint?.(booking, "soa")}>SOA</Button>
-                  <Button startIcon={<DownloadIcon />} onClick={() => onDownload?.(booking, "soa")}>DL</Button>
+                  <Button startIcon={<DownloadIcon />} onClick={() => onDownload?.(booking, "soa")}>Download</Button>
                 </ButtonGroup>
+
+                {/* PERMIT Button Group */}
                 <ButtonGroup size="small" variant="outlined">
                   <Button startIcon={<PrintIcon />} disabled={!canPermit} onClick={() => onPrint?.(booking, "permit")}>Permit</Button>
-                  <Button startIcon={<DownloadIcon />} disabled={!canPermit} onClick={() => onDownload?.(booking, "permit")}>DL</Button>
+                  <Button startIcon={<DownloadIcon />} disabled={!canPermit} onClick={() => onDownload?.(booking, "permit")}>Download</Button>
                 </ButtonGroup>
+                
+                {/* Approve Button */}
                 {canApprove && (
                   <Button size="small" variant="contained" color="success"
                     sx={{ fontWeight: 800, borderRadius: "8px", animation: "schedGlow 2s ease infinite" }}
@@ -1328,11 +1355,43 @@ function BookingDetailsDialog({ open, booking, onClose, onEdit, onArchive, onDel
                     ✓ Approve
                   </Button>
                 )}
-                {canEdit && <Button size="small" variant="outlined" startIcon={<EditIcon />} onClick={() => onEdit?.(booking)} sx={{ borderRadius: "8px" }}>Edit</Button>}
-                {canCancel && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon />} onClick={() => onCancel?.(booking)} sx={{ borderRadius: "8px" }}>Cancel</Button>}
-                <Button size="small" variant="outlined" startIcon={<ArchiveIcon />} onClick={() => onArchive?.(booking)} sx={{ borderRadius: "8px" }}>Archive</Button>
-                {showDelete && <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => onDelete?.(booking)} sx={{ borderRadius: "8px" }}>Delete</Button>}
+                
+                {/* Edit Button */}
+                {canEdit && (
+                  <Button size="small" variant="outlined" startIcon={<EditIcon />} 
+                    onClick={() => onEdit?.(booking)} 
+                    sx={{ borderRadius: "8px" }}>
+                    Edit
+                  </Button>
+                )}
+                
+                {/* Archive Button */}
+                <Button size="small" variant="outlined" startIcon={<ArchiveIcon />} 
+                  onClick={() => onArchive?.(booking)} 
+                  sx={{ borderRadius: "8px" }}>
+                  Archive
+                </Button>
+                
+                {/* Cancel Button */}
+                {canCancel && (
+                  <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon />} 
+                    onClick={() => onCancel?.(booking)} 
+                    sx={{ borderRadius: "8px" }}>
+                    Cancel
+                  </Button>
+                )}
+                
+                {/* Delete Button */}
+                {showDelete && (
+                  <Button size="small" variant="outlined" color="error" startIcon={<DeleteIcon />} 
+                    onClick={() => onDelete?.(booking)} 
+                    sx={{ borderRadius: "8px" }}>
+                    Delete
+                  </Button>
+                )}
               </Stack>
+              
+              {/* Close Button */}
               <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
                 <Button onClick={onClose} variant="contained" size="small"
                   sx={{ fontWeight: 900, borderRadius: "8px", background: `linear-gradient(135deg, ${G[500]}, ${G[700]})`, boxShadow: `0 2px 8px ${G.glow}` }}>
@@ -1672,7 +1731,7 @@ export default function SchedulePage() {
     <>
       <style>{GLOBAL_CSS}</style>
 
-      <Topbar title="Noveleta" />
+      <Topbar title="Municipality of Noveleta" />
 
       <Box
         className="sched-root"
@@ -1774,6 +1833,11 @@ export default function SchedulePage() {
         open={dayDialogOpen}
         dateStr={dayDialogDate}
         bookings={dayDialogBookings}
+        isSelected={
+          dayDialogDate
+            ? selectedDates.some((x) => x && x.isSame(dayjs(dayDialogDate), "day"))
+            : false
+        }
         onClose={() => { setDayDialogOpen(false); setDayDialogDate(null); setDayDialogBookings([]); }}
         onPick={(b) => { setDayDialogOpen(false); setDetailsBooking(b); setDetailsOpen(true); }}
         onAddToSelection={(dateStr) => {
